@@ -1,0 +1,18 @@
+# Data and environments — never committed.
+.venv/
+data/
+
+# Archives and model checkpoints. These only ever land under data/ today, but naming them
+# explicitly means one written anywhere else is still caught.
+*.zip
+*.pt
+*.ckpt
+
+# Generated leaderboard predictions: predictions.txt is 671 MB uncompressed. The code that
+# builds them is tracked (pipeline/submit.py); the output is not.
+deliverable/submissions/
+
+__pycache__/
+*.pyc
+.pytest_cache/
+.ipynb_checkpoints/

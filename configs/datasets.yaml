@@ -1,0 +1,61 @@
+# Temporal split boundaries. Justified in NOTES.md — do not change one without the other.
+#
+# Both datasets ship their own train/test boundary; we adopt it as `test_start` rather than
+# inventing one, and carve val out of the earlier block at `val_start`.
+
+ebnerd_demo:
+  loader: ebnerd
+  early_root: data/interim/ebnerd_demo/train        # provided train block -> train + val
+  test_root: data/interim/ebnerd_demo/validation    # provided validation block -> test
+  articles: data/interim/ebnerd_demo/articles.parquet
+  val_start: "2023-05-23 07:00:00"
+  test_start: "2023-05-25 07:00:00"
+  language: danish        # PyStemmer has Danish; bm25s ships no Danish stopword list
+  stopwords_file: configs/stopwords_da.txt
+  # Q3's "compute your own using BERT/XLM-RoBERTa" arm: paraphrase-multilingual-mpnet-base-v2
+  # (XLM-RoBERTa base fine-tuned on paraphrase pairs), 768-d, encoded once on a Kaggle T4 by
+  # notebooks/encode_articles.ipynb. Covers all 125,541 EB-NeRD articles, so one file serves
+  # demo, small and the leaderboard.
+  #
+  # Chosen on **val** only, over both encoders the assignment names (semantic-only AUC,
+  # ebnerd_small): xlmr 0.5309 [0.5282, 0.5336] > word2vec 0.5098 [0.5073, 0.5124] >
+  # bert_base_multilingual_cased 0.4857 [0.4832, 0.4880]. It is also the only one that beats
+  # BM25 (0.5205), which is what flips the semantic axis from losing to winning on Danish.
+  # Reproduce any of them with `retrieval.embeddings --embeddings <parquet>`; see NOTES.md.
+  embeddings: data/interim/xlmr/ebnerd_full_vectors.parquet
+  # provided-embeddings arm, kept for the ablation:
+  # data/interim/Ekstra_Bladet_word2vec/Ekstra_Bladet_word2vec/document_vector.parquet
+
+ebnerd_small:
+  # Same collection window and 07:00 boundary as demo (verified, not assumed), but ~10x the
+  # scale: 232,887 + 244,647 impressions over 15,143 users, 20,738 articles.
+  loader: ebnerd
+  early_root: data/interim/ebnerd_small/train
+  test_root: data/interim/ebnerd_small/validation
+  articles: data/interim/ebnerd_small/articles.parquet
+  val_start: "2023-05-23 07:00:00"
+  test_start: "2023-05-25 07:00:00"
+  language: danish
+  stopwords_file: configs/stopwords_da.txt
+  # Same encoder as demo, chosen by the same val-only ablation.
+  embeddings: data/interim/xlmr/ebnerd_full_vectors.parquet
+
+mind_small:
+  loader: mind
+  early_root: data/interim/MINDsmall_train/MINDsmall_train
+  test_root: data/interim/MINDsmall_dev/MINDsmall_dev
+  val_start: "2019-11-13 00:00:00"
+  test_start: "2019-11-15 00:00:00"
+  language: english
+  stopwords: english
+  # MIND ships no article embeddings, so we generate them once and cache.
+  #
+  # Kept over the multilingual XLM-R used for EB-NeRD, on **val**: MiniLM 0.6338
+  # [0.6312, 0.6362] vs xlmr 0.6256 [0.6232, 0.6279], intervals disjoint. An
+  # English-only specialist beats a 50-language generalist on English text, which is the
+  # mirror of the EB-NeRD result where the multilingual model wins on Danish.
+  #
+  # Note for anyone tempted to "fix" this: on **test** the order reverses (xlmr 0.6364 vs
+  # MiniLM 0.6339). Selection is on val by rule, fixed before looking. Switching on the
+  # strength of the test number is precisely the error the rule exists to prevent.
+  model: sentence-transformers/all-MiniLM-L6-v2
