@@ -578,7 +578,25 @@ MIND has no dates, so the filter can't be applied there at all.
 
 ## 13. Offline results vs Codabench: yes, they will differ
 
-Short answer: **yes, and substantially. Expect worse.** Four separate reasons:
+Short answer: **yes, they differ. I predicted worse and was wrong: both came in higher.**
+
+Actual results, comparing like with like (the submitted system is `emb` on both):
+
+| | offline test | leaderboard | diff |
+|---|---|---|---|
+| EB-NeRD | 0.5305 | **0.5336** (rank 130) | +0.0031 |
+| MIND | 0.6339 | **0.646** (rank 34) | +0.0121 |
+
+Seven of eight metrics came in above the offline figure. Only MIND's MRR fell (0.3486 to 0.3160),
+most likely a definitional difference on multi-click impressions rather than a real regression.
+
+That direction is worth understanding, because it is evidence about your split rather than luck. A
+leaking evaluation typically *collapses* on genuinely held-out data: the model was quietly scored
+on information it would not have at serving time, and the leaderboard takes that away. Yours went
+up, so the offline harness is reading as slightly conservative. That is the outcome the temporal
+split was built to earn.
+
+The four reasons the numbers differ at all still stand:
 
 **1. Different data entirely.** Your offline reports are on EB-NeRD demo/small and MIND-small.
 The leaderboards score *only* the big held-out sets: EB-NeRD's `ebnerd_testset` (13,536,710

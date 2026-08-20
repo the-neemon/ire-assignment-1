@@ -22,9 +22,11 @@ ebnerd_demo:
   # bert_base_multilingual_cased 0.4857 [0.4832, 0.4880]. It is also the only one that beats
   # BM25 (0.5205), which is what flips the semantic axis from losing to winning on Danish.
   # Reproduce any of them with `retrieval.embeddings --embeddings <parquet>`; see NOTES.md.
-  embeddings: data/interim/xlmr/ebnerd_full_vectors.parquet
-  # provided-embeddings arm, kept for the ablation:
-  # data/interim/Ekstra_Bladet_word2vec/Ekstra_Bladet_word2vec/document_vector.parquet
+  embeddings: data/interim/Ekstra_Bladet_contrastive_vector/Ekstra_Bladet_contrastive_vector/contrastive_vector.parquet
+  # Other arms, kept reproducible for the ablation (retrieval.embeddings --embeddings <path>):
+  #   xlmr (own, 768d)     data/interim/xlmr/ebnerd_full_vectors.parquet
+  #   word2vec (300d)      data/interim/Ekstra_Bladet_word2vec/Ekstra_Bladet_word2vec/document_vector.parquet
+  #   mBERT (768d)         data/interim/google_bert_base_multilingual_cased/google_bert_base_multilingual_cased/bert_base_multilingual_cased.parquet
 
 ebnerd_small:
   # Same collection window and 07:00 boundary as demo (verified, not assumed), but ~10x the
@@ -38,7 +40,7 @@ ebnerd_small:
   language: danish
   stopwords_file: configs/stopwords_da.txt
   # Same encoder as demo, chosen by the same val-only ablation.
-  embeddings: data/interim/xlmr/ebnerd_full_vectors.parquet
+  embeddings: data/interim/Ekstra_Bladet_contrastive_vector/Ekstra_Bladet_contrastive_vector/contrastive_vector.parquet
 
 mind_small:
   loader: mind

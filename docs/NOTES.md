@@ -75,8 +75,10 @@ The assignment names two, both 125,541 rows × 2 cols (`article_id Int32`, one `
 | `google_bert_base_multilingual_cased` | `bert_base_multilingual_cased.parquet` | 768 |
 
 Both cover **all 11,777** demo and **all 20,738** `ebnerd_small` articles (0 missing either way), and
-being full-corpus artifacts they serve every bundle with no re-download. Which of the two we use is
-settled by measurement, not preference — see "Choosing the EB-NeRD encoder" below. This is the
+being full-corpus artifacts they serve every bundle with no re-download. A third artifact in the same
+folder, `Ekstra_Bladet_contrastive_vector` (768-d), is not named by the PDF but is what ultimately
+ships; which encoder we use is settled by measurement, not preference. See "Choosing the EB-NeRD
+encoder" and "Adopting contrastive_vector" below. This is the
 semantic axis for EB-NeRD; nothing needs generating on that side. MIND has no equivalent and will need embeddings generated
 (MiniLM on CPU over the 65,238-article union).
 
@@ -755,3 +757,88 @@ Not tested, and worth stating: the title-vs-title+abstract question on **MIND**,
 coverage is 94.8% and pools are ~3x larger, so the trade could land differently. And the embedding
 side hardcodes title+abstract with no field flag, so testing body there means re-encoding on a GPU
 rather than flipping a switch. Reproduce with `scratchpad/field_ablation.py`.
+
+## Adopting contrastive_vector (final encoder decision, 19 Aug)
+
+Reverses the earlier "Dropping the self-chosen encoder" section. That section removed
+`Ekstra_Bladet_contrastive_vector` on the reading that the PDF names only `Ekstra_Bladet_word2vec`
+and `google_bert_base_multilingual_cased`, and recorded the ~0.041 AUC the removal cost.
+
+The reading was too narrow. Q3 offers "the provided article embeddings" or "compute your own using
+BERT/XLM-RoBERTa". `contrastive_vector` is a provided article embedding, shipped in the same official
+`artifacts/` folder as the other two; the PDF names those two as examples of that arm rather than as
+its full extent. Adopting it is inside the brief, not outside it.
+
+Semantic-only AUC on **val**, `ebnerd_small`, everything else fixed:
+
+| encoder | arm | dim | val AUC |
+|---|---|---|---|
+| **contrastive_vector** (ships) | provided | 768 | **0.5506** [0.5480, 0.5531] |
+| xlmr paraphrase (own) | own | 768 | 0.5309 [0.5282, 0.5336] |
+| word2vec | provided | 300 | 0.5098 [0.5073, 0.5124] |
+| bert_base_multilingual_cased | provided | 768 | 0.4857 [0.4832, 0.4880] |
+
+Best EB-NeRD test AUC 0.5305 -> **0.5397** (+0.0092 over the xlmr build, +0.0290 over word2vec).
+
+Reproduction note: the re-run's numbers match the archived `results/encoder_ablation/contrastive_vector/`
+reports to four decimals, so the ablation artifacts and the shipped build agree.
+
+### What the switch changed downstream
+
+**The retrieval track flipped, and this is the substantive finding.** Under xlmr, BM25 out-retrieved
+embeddings on EB-NeRD at every K. Under contrastive the winner depends on the split, significantly in
+both directions:
+
+| emb - bm25, recall@200 | val | test |
+|---|---|---|
+| ebnerd_small | **-0.0016** [-0.0030, -0.0002] ✓ | **+0.0030** [+0.0022, +0.0039] ✓ |
+| ebnerd_demo | -0.0034 [-0.0093, +0.0027] | **+0.0071** [+0.0040, +0.0104] ✓ |
+
+BM25 wins on val, embeddings win on test, same dataset and same code. Fusion shows the identical
+pattern (`fused - emb`: +0.0022 ✓ on small val, -0.0017 ✓ on small test; alpha 0.70 on both bundles),
+and it also appeared under xlmr, so it is a property of EB-NeRD rather than of one encoder or one
+method. Plausible mechanism: val is a 2-day window against test's 7, the test block carries its own
+later history window, and news relevance decays fast enough that the boundary is a distribution shift.
+
+Design note §5 was rewritten around this. The old §5 claimed BM25 wins retrieval on EB-NeRD outright,
+which is no longer true; the two-track finding survives as a difference of margin (+0.0289 AUC vs
++0.0030 recall@200, 10x) rather than of direction.
+
+Unchanged: MIND (keeps MiniLM, untouched by this), the temporal split, BM25, and the harness.
+
+### Two partial runs, and how they were caught
+
+The re-run was killed twice mid-way by VSCode crashes, both times leaving mixed-encoder artifacts:
+embeddings rewritten with contrastive while fusion and the reports were still xlmr-derived. Nothing
+errored; `results/` simply described a system that never existed.
+
+Caught by comparing artifact mtimes against `configs/datasets.yaml`'s mtime, since every score file
+must postdate the config that produced it. That check is now the standard verification after any
+encoder change, and it is worth more than a green test run: the tests all still passed in the
+inconsistent state, because they assert leakage properties of the split, not agreement between stages.
+
+`setsid` did not save the second attempt. What worked was running one stage per foreground call, so
+each either completes or is visibly incomplete.
+
+### Rebuilt leaderboard file (contrastive)
+
+| | impressions | wall | peak RSS | zip |
+|---|---|---|---|---|
+| EB-NeRD `ebnerd_testset`, contrastive 768-d | 13,536,710 | **13m30s** | **5.64 GB** | 230.0 MB |
+
+Faster than the xlmr build at the same dimensionality (33m28s / 5.9 GB) despite identical work, so
+that earlier figure was measuring a loaded machine rather than the algorithm. Worth recording because
+it is the kind of "benchmark" number that would have been quoted as a property of the code.
+
+Peak RSS is unchanged from the xlmr run, which is the property that matters: memory is set by
+`PAIR_BLOCK` and the vector table, not by the number of impressions.
+
+Validated before upload, every line rather than a sample: 13,536,710 lines against the test file's
+13,536,710 impressions and 205,925,868 candidate pairs; zero `impression_id` out of order; zero wrong
+candidate counts; zero rank lists that are not a permutation of 1..n. Zip contains exactly
+`predictions.txt` and nothing else. Separately, 40 random impressions were re-ranked from scratch in
+float64 through an independent code path (dicts rather than the submitter's lookup arrays), with zero
+mismatches.
+
+The superseded file is kept as `ebnerd_predictions.STALE-xlmr-scored-0.5336.zip` rather than deleted,
+named with the score it earned so it cannot be confused with the current entry.
