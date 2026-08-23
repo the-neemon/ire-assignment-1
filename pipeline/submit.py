@@ -400,8 +400,19 @@ def main() -> None:
     cfg = yaml.safe_load(CONFIG.read_text())[cfg_key]
 
     OUT.mkdir(exist_ok=True)
-    txt, zip_path = OUT / inner, OUT / archive
-    print(f"{args.target} -> {zip_path}")
+    if args.limit:
+        # A smoke test must never touch the real submission artifact. Writing a partial file
+        # to the upload path once produced a 20,000-line "submission" that scored 0.5012,
+        # i.e. random, because it covered 0.84% of the test set (docs/NOTES.md). Partial
+        # output that looks valid is this project's most repeated failure; here it is
+        # structurally prevented rather than remembered.
+        txt = OUT / f"SMOKE-{args.limit}-{inner}"
+        zip_path = OUT / f"SMOKE-{args.limit}-{archive}"
+        print(f"{args.target} SMOKE TEST ({args.limit:,} impressions) -> {zip_path}")
+        print("  NOT a submittable file; the real one is untouched.")
+    else:
+        txt, zip_path = OUT / inner, OUT / archive
+        print(f"{args.target} -> {zip_path}")
 
     written = 0
     with open(txt, "w") as handle:

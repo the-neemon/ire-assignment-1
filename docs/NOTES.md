@@ -1095,3 +1095,35 @@ uploaded, so named for what it is rather than a score), alongside the scored
 **Still embeddings-only in the lexical sense**: no BM25, no `fused`, per the decision not to ship a
 fused submission. The entity signal is a second *content* axis blended onto embeddings, not the
 lexical axis returning by another name.
+
+### A 0.5012 leaderboard score, and the process failure behind it
+
+Submission 897967 (MIND, 23 Aug 11:39) scored **0.5012**, essentially random, against the previous
+entry's 0.6460. The entity blend did not fail. The uploaded file was a **20,000-impression smoke
+test**, covering 0.84% of the 2,370,727-impression test set; Codabench scores the missing 99.2% as
+unranked, which averages to chance.
+
+Cause: `pipeline/submit.py --limit N` wrote its partial output to the *real* submission path,
+`deliverable/submissions/mind_prediction.zip`. Sequence on 23 Aug:
+
+| time | contents of `mind_prediction.zip` |
+|---|---|
+| 11:08 | full emb-only build, 2,370,727 lines |
+| ~11:2x | **smoke test `--limit 20000` overwrote it, 0.9 MB, 20,000 lines** |
+| **11:39** | **uploaded (this is what scored 0.5012)** |
+| 11:43 | full entity build overwrote it, 2,370,727 lines |
+
+**This is the third instance of the same failure mode in this project** (see the OOM-killed partial
+output mistaken for a regression, and the two crash-truncated pipeline runs that left mixed-encoder
+artifacts). Each time the artifact looked structurally valid and nothing errored. The recurring
+lesson is that "looks valid" is not a property worth trusting for generated artifacts, and the fix
+has to be structural rather than procedural.
+
+Fixed structurally: `--limit` now writes to `SMOKE-<N>-<filename>` and prints "NOT a submittable
+file; the real one is untouched." Verified by checksumming the real submission before and after a
+`--limit 5000` run: unchanged. The smoke test can no longer clobber a submission even by accident.
+
+Worth noting what did *not* catch this. The line-count validation would have caught it instantly,
+but it runs after a full build, not after a smoke test, and nothing re-validated the artifact between
+the smoke test and the upload. A cheap guard for the future: check line count immediately before
+uploading, not only immediately after building.
