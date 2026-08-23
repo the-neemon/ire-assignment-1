@@ -1127,3 +1127,27 @@ Worth noting what did *not* catch this. The line-count validation would have cau
 but it runs after a full build, not after a smoke test, and nothing re-validated the artifact between
 the smoke test and the upload. A cheap guard for the future: check line count immediately before
 uploading, not only immediately after building.
+
+## Final leaderboard state (23 Aug)
+
+Both competitions closed out with two submissions each. Final numbers, and the corrected offline
+comparison (an earlier draft of DESIGN_NOTE §11 mapped 893893 to the wrong encoder era and computed
+the wrong comparison from it; corrected here rather than compounded):
+
+| | submission | AUC | status |
+|---|---|---|---|
+| EB-NeRD (comp. 2469) | 893893 | 0.5336 | superseded, XLM-R encoder |
+| **EB-NeRD (final)** | **895220** | **0.5381** | current pipeline, `contrastive_vector` |
+| MIND (comp. 13967) | 892088 | 0.6460 | superseded, `history_len=30`, embeddings-only |
+| **MIND (final)** | **898179** | **0.6503** | current pipeline, `history_len=100` + entity blend |
+
+895220 was confirmed by the user to be the `contrastive_vector` build (`ebnerd_predictions.zip`,
+current); 893893 corresponds to `ebnerd_predictions.STALE-xlmr-scored-0.5336.zip`, the earlier XLM-R
+build. Against the current offline `ebnerd_demo` test `emb` AUC (0.5418), 895220 came in -0.0037,
+unremarkable and in the expected direction for a larger independent population. Against offline
+`emb+entity` test AUC (0.6391), 898179 came in +0.0112, the reassuring direction.
+
+897967 (MIND, 0.5012) is excluded from this table: it was the `--limit`-smoke-test-overwrote-the-
+real-file incident recorded above, not a measurement of any real system.
+
+No further ablations planned; this is the final reported state of both leaderboard entries.

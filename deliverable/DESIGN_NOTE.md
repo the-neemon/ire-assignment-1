@@ -2,14 +2,12 @@
 
 ## 1. What was built
 
-A config-driven pipeline from raw archives to metric reports in one command — `make data` for Q1's
-feature store, `make all` for everything — across **EB-NeRD demo** (49k impressions / 1,590 users),
-**EB-NeRD small** (478k / 15,143) and **MIND-small** (230k / 50,000). Both datasets normalise into one
-schema (`impressions_{train,val,test}.parquet`: id, user, timestamp, candidates[], clicked[],
-history[], recency_seconds; `articles.parquet`: id, title, abstract, body, category, entities[],
-published_time), so every downstream stage has one code path, not a Danish branch and an English one.
-`entities` normalises two source shapes (EB-NeRD's `ner_clusters`, MIND's per-field JSON) into one
-`List(String)` (74%/87% non-empty); nothing scores on entities yet, the feature store is a contract.
+A config-driven pipeline from raw archives to metric reports in one command (`make data` for Q1's
+feature store, `make all` for everything) across **EB-NeRD demo** (49k impressions/1,590 users),
+**EB-NeRD small** (478k/15,143) and **MIND-small** (230k/50,000). Both normalise into one schema
+(`impressions_*.parquet`: id, user, timestamp, candidates[], clicked[], history[]; `articles.parquet`:
+id, title, abstract, body, category, entities[]), one code path rather than a Danish branch and an
+English one. `entities` normalises two source shapes into one `List(String)` (74%/87% non-empty).
 
 Three scorers run over that schema, **bm25**, **emb**, **fused**, on two tracks: **re-rank** (score the
 pool the log actually showed; leaderboard-comparable) and **retrieval** (ignore the pool, pull the
@@ -27,11 +25,10 @@ EB-NeRD ships a separate `history.parquet` per block whose window ends exactly w
 begin, so the behaviour-window boundary is given rather than guessed (NOTES.md, §splits, for the
 alternative considered and rejected).
 
-**Enforcement, not discipline.** `split.py` asserts on every build and fails rather than warns: strict
-`train < val < test`; per-item history-precedes-impression; `clicked` is a subset of `candidates`; every
-candidate resolves; no empty ids. Where a check is impossible it says so — MIND's history has no
-per-item timestamps, so the harness prints that the guarantee is structural rather than verified,
-instead of passing vacuously.
+**Enforcement, not discipline.** `split.py` asserts on every build, failing rather than warning:
+strict `train < val < test`, history-precedes-impression, `clicked` a subset of `candidates`, every
+candidate resolves. Where impossible it says so: MIND's history has no per-item timestamps, so the
+guarantee there is structural rather than verified, not passed vacuously.
 
 `tests/test_leakage.py` (`make test`, 19 tests, ~20s) re-checks the same properties from *outside*,
 reading only `data/processed/`: the build asserts what it meant to write, the tests assert what is on
@@ -107,18 +104,16 @@ failed for that user.
 | EB-NeRD small · **test** | 0.0247 | **0.0277** | **+0.0030** [+0.0022, +0.0039] |
 | MIND-small · test | 0.0220 | **0.0239** | +0.0019 [+0.0008, +0.0031] |
 
-**On EB-NeRD the retrieval winner flips between val and test, both directions significant**: BM25 wins
-val, embeddings win test, same code, same K, a sign change with disjoint intervals, not noise. MIND
-shows no such flip; embeddings win there at every K. §6 finds the identical pattern in the fusion
-weight, pointing at the dataset rather than either method: val is a 2-day window against test's 7, each
-with its own history window, so the lexical/semantic relationship genuinely drifts across the boundary,
-two weeks is a different news distribution.
+**On EB-NeRD the retrieval winner flips between val and test, both directions significant**: BM25
+wins val, embeddings win test, same code, same K, a sign change with disjoint intervals, not noise.
+MIND shows no such flip. §6 finds the identical pattern in the fusion weight, pointing at the dataset:
+val is a 2-day window against test's 7, each with its own history window, so the lexical/semantic
+relationship genuinely drifts, two weeks is a different news distribution.
 
-**Re-ranking and retrieving stay different jobs, but by margin now, not direction.** The same
-contrastive vectors beat BM25 by **+0.0289** AUC ordering the given pool and by only **+0.0030**
-recall@200 searching all 20,738 articles, a 10x gap for the same encoder on the same split, evidence
-for different signals per stage rather than one universal winner. Absolute recall is low everywhere
-(2–5%); §8 explains why, a property of the corpus, not either retriever.
+**Re-ranking and retrieving stay different jobs, by margin now, not direction.** The same contrastive
+vectors beat BM25 by **+0.0289** AUC ordering the pool and by only **+0.0030** recall@200 searching all
+20,738 articles, a 10x gap for the same encoder and split, evidence for different signals per stage.
+Absolute recall is low everywhere (2-5%), §8 explains why, a property of the corpus, not the retriever.
 
 ## 6. Fusion, an addition the brief did not ask for
 
@@ -147,29 +142,33 @@ signal rather than noise. AUC rose significantly to 100 clicks (bm25 +0.0039, em
 plateaued exactly there. EB-NeRD's own sweep (§3) was flat over the same range, so it stays at 30;
 `history_len` is now per-dataset in config. This table reflects the corrected MIND value.
 
+**A second MIND-only signal, entity overlap, ships alongside `emb`.** MIND's entities are clean and
+Wikidata-linked; a candidate's Jaccard overlap with the user's recent-history entities, blended onto
+`emb` (`alpha*entity + (1-alpha)*emb`), was selected on val (0.20) and checked once on test: **+0.0022
+[+0.0018, +0.0026] AUC**, holding almost exactly (val +0.0023), unlike the fusion alpha above. Not
+tried on EB-NeRD, its entities are a different extraction (`ner_clusters`) with different coverage.
+
 ## 7. Evaluation harness
 
-Metrics are computed **per impression**, which makes everything else possible: slicing is a mask over
-that vector, bootstrapping resamples it over impressions, the approximately-independent unit (resampling
-candidates within one would understate variance). Comparisons use a **paired** bootstrap on shared
-resamples, since two systems on the same impressions have correlated errors, an unpaired comparison of
-independent intervals is far too conservative.
+Metrics are computed **per impression**: slicing is a mask over that vector, bootstrapping resamples
+it over impressions, the approximately-independent unit. Comparisons use a **paired** bootstrap on
+shared resamples, since two systems on the same impressions have correlated errors, an unpaired
+comparison of independent intervals is far too conservative.
 
-**Cold-start needed a defensible definition.** "Empty history" fails on EB-NeRD, which has *zero* such
-users (median history 258), it would select an empty slice and silently report nothing. The harness
-uses a per-dataset bottom-decile history-length threshold plus the true zero-history slice where one
-exists; on MIND that slice scores 0.5125 identically across all three systems, correctly, no history
-means no query, so no ranking is invented.
+**Cold-start needed a defensible definition.** "Empty history" fails on EB-NeRD (zero such users,
+median 258), so the harness uses a per-dataset bottom-decile threshold plus the true zero-history
+slice where one exists; MIND's scores 0.5125 identically across systems, correctly, no history means
+no ranking invented.
 
 Beyond-accuracy over the top-10: category intra-list diversity, novelty as self-information against
 *train* click shares, coverage, sobering at **5–21%** of the catalogue ever surfaced.
 
 ## 8. Observations
 
-**Content signals are weak here, and that is the result, not a failure.** MIND reaches 0.6381, within
-reach of published neural baselines for MIND-small (~0.65–0.67) from an entirely unsupervised system.
-EB-NeRD tops out at 0.5397: its pools are much smaller (median 8–9 vs MIND's 23–26) and drawn from a
-tight recency window, so every candidate is already plausible, there is little for content to separate.
+**Content signals are weak here, and that is the result, not a failure.** MIND reaches 0.6391 (§6),
+within reach of published neural baselines for MIND-small (~0.65-0.67), unsupervised. EB-NeRD tops out
+at 0.5397: pools are much smaller (median 8-9 vs MIND's 23-26) and drawn from a tight recency window,
+so candidates are already plausible, little for content to separate.
 
 **Simple behavioural features are not the shortcut they look like.** Train-click popularity scores
 *below* random on EB-NeRD (0.459), the pool is already popularity-filtered.
@@ -188,9 +187,8 @@ period, embedding the future, and cannot be computed at serving time. Carried in
 so the harness can quantify them; no shipped scorer reads them. Test AUC without/with popularity:
 EB-NeRD demo 0.5300 -> 0.5728, EB-NeRD small 0.5291 -> 0.5731 (+0.0440 [+0.0431, +0.0449]).
 
-**One serving-unavailable feature is worth +0.044, more than twice the entire semantic axis (+0.0198,
-§6), the largest legitimate win in this project**, and the biggest effect anywhere in the report; any
-comparison that quietly includes it is not measuring the same system.
+**One serving-unavailable feature is worth +0.044, more than twice the semantic axis (+0.0198, §6),
+the largest legitimate win here**; any comparison quietly including it is not the same system.
 
 Also enforced, not trusted: post-click engagement columns are dropped at the split, and retrieval
 filters `published_time <= impression_time` (867 EB-NeRD articles postdate the test window).
@@ -212,41 +210,36 @@ Slice pushdown reaches the parquet row groups, so an offset-13M slice costs the 
 without it streaming would be O(n²). MIND needed a one-off TSV→parquet conversion first, CSV has no
 such pushdown and OOM-killed the first attempt reading it whole (3.07 GB to parse).
 
-**BM25 is the expensive piece, and I first overstated how expensive.** `get_scores` is dense over the
-whole corpus per distinct query, ~2M MIND-large histories × 120,961 articles, which I originally
-called impractical on the ~10¹¹ operation count alone. Timing it says otherwise: 1.6 ms/query over
-65,238 articles, extrapolating to **~1.6 h** at MIND-large's corpus and query count. Slow, roughly 7×
-the embedding submission's own runtime, but not a wall. Operation counts are not wall-clock when the
-kernel is sparse and vectorised, and I should have measured before asserting. The direction of the
-fix is unchanged: a dense scorer per query is the wrong shape at this size, and an inverted index
-with early termination (WAND) is what removes the cost rather than paying it. Projected at
-`ebnerd_large` (600M): FAISS flat is O(N·d)/query and would need IVF-PQ with `nlist ~ sqrt(N)`.
+**BM25 is expensive, and I first overstated by how much.** `get_scores` is dense over the whole
+corpus per query; ~2M MIND-large histories x 120,961 articles I originally called impractical on the
+~10¹¹ operation count alone. Timed: 1.6 ms/query, extrapolating to **~1.6 h**, roughly 7x the embedding
+submission's runtime, slow but not a wall. Operation counts are not wall-clock for a sparse, vectorised
+kernel; I should have measured first. The fix is unchanged: a dense per-query scorer is the wrong shape
+here, and WAND-style early termination removes the cost. Projected at `ebnerd_large` (600M): FAISS flat
+is O(N·d)/query, needing IVF-PQ with `nlist ~ sqrt(N)`.
 
 ## 11. Leaderboard submissions
 
-Both competitions score held-out sets far larger than the splits above (`ebnerd_testset`, 13.5M
-impressions; MIND-large test, 2.4M), streamed by `pipeline/submit.py` (§10) with unchanged scoring
-semantics. **Both entries are embeddings-only, not `fused`.** On EB-NeRD that *is* the reported system
-(§6). On MIND it costs a known 0.0012 AUC, and the reason is cost rather than impossibility: adding
-BM25 would take ~1.6 h on top of the current 5 min run (§10), and `submit.py` would need a BM25 path
-it does not have. A deliberate trade, not a blocked one, and reported as a different system rather
-than letting `fused`'s stronger offline number stand in for what was uploaded.
+Both competitions score held-out sets far larger than the splits above (`ebnerd_testset` 13.5M
+impressions, MIND-large test 2.4M), streamed by `pipeline/submit.py` (§10), unchanged scoring
+semantics. **Both entries are embeddings-only, not `fused`**: on EB-NeRD that *is* the reported system
+(§6); on MIND, BM25 would cost ~1.6h on top of the 5min run (§10) for +0.0012 AUC, a deliberate trade
+reported as a different system rather than letting `fused`'s number stand in for what was uploaded.
 
-| | submission | AUC | MRR | nDCG@5 | nDCG@10 |
-|---|---|---|---|---|---|
-| EB-NeRD (RecSys 2024, comp. 2469) | 893893 | **0.5336** | 0.3412 | 0.3779 | 0.4576 |
-| MIND (comp. 13967) | 892088 | **0.6460** | 0.3160 | 0.3405 | 0.3963 |
+| | submission | AUC | status |
+|---|---|---|---|
+| EB-NeRD (RecSys 2024, comp. 2469) | 893893 | 0.5336 | superseded, XLM-R encoder |
+| **EB-NeRD (final)** | **895220** | **0.5381** | current pipeline, `contrastive_vector` |
+| MIND (comp. 13967) | 892088 | 0.6460 | superseded, `history_len=30`, embeddings-only |
+| **MIND (final)** | **898179** | **0.6503** | current pipeline, `history_len=100` + entity blend (§6) |
 
-**Each score must be read against the offline number for the system that produced it, not whatever
-the harness reports today**, since both moved since these were built (EB-NeRD's encoder, MIND's
-`history_len`, §6). 893893 postdates the `contrastive_vector` switch, so its baseline is the current
-`emb` row (0.5397/0.3492/0.3831/0.4627): the leaderboard came in **below offline on all four metrics**
-(−0.0061 AUC), the expected direction, a large independent population regressing toward the mean
-rather than repeating one split's luck. 892088 predates the `history_len` fix, so its baseline is the
-*old* `history_len=30` row (AUC 0.6339, MRR 0.3486, nDCG@5 0.3315, nDCG@10 0.3911): against that,
-leaderboard beat offline on three of four (AUC +0.0121, nDCG@5, nDCG@10), losing only on MRR (0.316 vs
-0.349); likely `eval/metrics.py`'s first-clicked-article MRR versus an average-over-all-clicks
-implementation. Neither entry reflects the current pipeline; rebuilding both is the obvious next step,
-not done here, EB-NeRD is rate-limited to five submissions a day. Validated offline before upload: all
-13,536,710 lines as rank permutations of the correct length in test-file row order, plus 40 per dataset
-re-ranked in float64 through an independent path. **Screenshots:** *(attach the two Codabench rows)*
+**Each score reads against the offline number for the system that produced it.** 895220 (post-switch)
+against offline `ebnerd_demo` `emb` test, 0.5418: leaderboard **−0.0037**, unremarkable, a larger
+independent population regressing toward the mean. 898179 against offline `emb+entity` test, 0.6391:
+leaderboard **+0.0112**, the reassuring direction. (An earlier draft mis-mapped 893893 to the wrong
+encoder here; dropped rather than repeated.)
+
+Both validated before upload: every line a correct-length rank permutation in test-file row order,
+plus 40 re-ranked independently in float64. Excluded: 897967 (MIND, 0.5012), a `--limit` smoke test
+that overwrote the real file pre-upload, scoring 2.37M candidates unranked; `submit.py` now isolates
+smoke tests to their own path. **Screenshots:** *(893893, 895220, 892088, 898179)*
