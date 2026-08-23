@@ -12,6 +12,9 @@ ebnerd_demo:
   test_start: "2023-05-25 07:00:00"
   language: danish        # PyStemmer has Danish; bm25s ships no Danish stopword list
   stopwords_file: configs/stopwords_da.txt
+  # History-length sweep on val was flat 1->100 clicks (median history 258, so a cutoff
+  # of 30 barely truncates); kept at the original default. See docs/NOTES.md.
+  history_len: 30
   # Q3's "compute your own using BERT/XLM-RoBERTa" arm: paraphrase-multilingual-mpnet-base-v2
   # (XLM-RoBERTa base fine-tuned on paraphrase pairs), 768-d, encoded once on a Kaggle T4 by
   # notebooks/encode_articles.ipynb. Covers all 125,541 EB-NeRD articles, so one file serves
@@ -39,6 +42,7 @@ ebnerd_small:
   test_start: "2023-05-25 07:00:00"
   language: danish
   stopwords_file: configs/stopwords_da.txt
+  history_len: 30        # same sweep result as demo, verified separately (docs/NOTES.md)
   # Same encoder as demo, chosen by the same val-only ablation.
   embeddings: data/interim/Ekstra_Bladet_contrastive_vector/Ekstra_Bladet_contrastive_vector/contrastive_vector.parquet
 
@@ -50,6 +54,20 @@ mind_small:
   test_start: "2019-11-15 00:00:00"
   language: english
   stopwords: english
+  # History-length sweep on val: AUC rises significantly from 30 all the way to 100
+  # (bm25 +0.0039, emb +0.0018), then plateaus exactly (100/200/300/558 indistinguishable).
+  # MIND's median history is 20 and mean 33.3, so 30 was truncating a materially long tail
+  # that EB-NeRD (median 258) never had. See docs/NOTES.md.
+  history_len: 100
+  # Entity-overlap signal, blended onto the embedding score as
+  #   alpha*entity_z + (1-alpha)*emb_z
+  # Jaccard between a candidate's entities and the union of the user's last history_len
+  # articles' entities. MIND ships Wikidata-linked entities for 57,054/65,238 articles.
+  # alpha selected on **val** (0.20), applied unchanged to test: +0.0022 [+0.0018, +0.0026]
+  # AUC over emb alone, significant, and it generalised across the split boundary (val
+  # +0.0023 vs test +0.0022). EB-NeRD has no entity_alpha: its entities are ner_clusters
+  # with different coverage and the signal is untested there.
+  entity_alpha: 0.20
   # MIND ships no article embeddings, so we generate them once and cache.
   #
   # Kept over the multilingual XLM-R used for EB-NeRD, on **val**: MiniLM 0.6338

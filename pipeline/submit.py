@@ -3,7 +3,7 @@
 The leaderboards score held-out test sets that are far larger than anything the offline
 harness touches — EB-NeRD 13.5M impressions (206M candidate pairs), MIND-large 2.4M — so
 this cannot reuse `retrieval/embeddings.py`, which materialises every impression at once.
-The scoring *semantics* are identical (mean of the last HISTORY_LEN article vectors,
+The scoring *semantics* are identical (mean of the last `history_len` article vectors,
 L2-normalised, cosine against each candidate); only the execution is streamed.
 
     python -m pipeline.submit ebnerd            -> submissions/ebnerd_predictions.zip
@@ -18,8 +18,10 @@ Format, from each competition's Submission Guidelines (fetched from the Codabenc
 where 1 is the best. Row order must match the test file. The zip must contain the text
 file and nothing else — no folders, no __MACOSX.
 
-Only the embedding scorer ships here, on both datasets, because BM25's `get_scores` is dense
-over the whole corpus per distinct query and does not survive these sizes (DESIGN_NOTE §10).
+Only the embedding scorer ships here, on both datasets. BM25's `get_scores` is dense over the
+whole corpus per distinct query, which measured at ~1.6 h for MIND-large's 2M distinct histories
+(docs/NOTES.md) — expensive enough that I left it out, not impossible. Adding it would mean a
+BM25 path in this file, which does not exist yet.
 
 **So the leaderboard entry is not the reported headline system, and the gap is not free.**
 Offline, `fused` beats embeddings alone by +0.0014 AUC on MIND and +0.0095 on EB-NeRD; on
@@ -40,7 +42,6 @@ import numpy as np
 import polars as pl
 import yaml
 
-from retrieval.bm25 import HISTORY_LEN
 
 ROOT = Path(__file__).resolve().parent.parent
 CONFIG = ROOT / "configs/datasets.yaml"
@@ -85,8 +86,8 @@ def score_pairs(article_rows: np.ndarray, user_rows: np.ndarray,
 
 
 def mean_pool(histories: pl.Series, article_row: np.ndarray,
-              vectors: np.ndarray, dim: int) -> np.ndarray:
-    """User vectors: mean of the last HISTORY_LEN article vectors, L2-normalised.
+              vectors: np.ndarray, dim: int, history_len: int) -> np.ndarray:
+    """User vectors: mean of the last `history_len` article vectors, L2-normalised.
 
     Row i corresponds to histories[i]. Users with no usable history stay all-zero, which
     is the cold-start convention the offline scorer uses too.
@@ -95,7 +96,7 @@ def mean_pool(histories: pl.Series, article_row: np.ndarray,
     for i, history in enumerate(histories):
         if history is None or len(history) == 0:
             continue
-        rows = article_row[np.asarray(history[-HISTORY_LEN:], dtype=np.int64)]
+        rows = article_row[np.asarray(history[-history_len:], dtype=np.int64)]
         if len(rows):
             users[i] = vectors[rows].mean(axis=0)
     users /= np.linalg.norm(users, axis=1, keepdims=True) + 1e-9
@@ -137,7 +138,7 @@ def stream_ebnerd(cfg: dict, limit: int | None):
     print("  building user vectors from history.parquet")
     history = pl.read_parquet(root / "test/history.parquet",
                               columns=["user_id", "article_id_fixed"])
-    users = mean_pool(history["article_id_fixed"], article_row, vectors, dim)
+    users = mean_pool(history["article_id_fixed"], article_row, vectors, dim, cfg["history_len"])
     uids = history["user_id"].to_numpy().astype(np.int64)
     user_row = np.full(int(uids.max()) + 1, len(users), dtype=np.int64)
     user_row[uids] = np.arange(len(users))
@@ -192,6 +193,55 @@ def _provided_vectors(cfg: dict, articles: pl.DataFrame) -> np.ndarray:
 
 # ---------------------------------------------------------------------------- MIND
 
+def _mind_entity_sets(root: Path, article_row: dict, n_rows: int) -> list[set]:
+    """Entity surface forms per article row, parsed exactly as pipeline/split.py does.
+
+    Returned as a list indexed by the same row ids `article_row` maps to, so the streaming
+    loop can look entities up by row without going back through article_id strings.
+    The trailing row (the unknown-article sentinel) gets an empty set.
+    """
+    dtype = pl.List(pl.Struct({"Label": pl.String}))
+
+    def labels(col: str) -> pl.Expr:
+        return (pl.col(col).fill_null("[]").str.json_decode(dtype)
+                .list.eval(pl.element().struct.field("Label")))
+
+    ent = pl.read_csv(
+        root / "news.tsv", separator="\t", has_header=False, quote_char=None,
+        new_columns=["article_id", "category", "subcategory", "title", "abstract",
+                     "url", "title_entities", "abstract_entities"],
+    ).select(
+        "article_id",
+        pl.concat_list(labels("title_entities"), labels("abstract_entities"))
+        .list.unique(maintain_order=True).alias("entities"),
+    )
+
+    out: list[set] = [set() for _ in range(n_rows)]
+    for aid, ents in zip(ent["article_id"].to_list(), ent["entities"].to_list()):
+        row = article_row.get(aid)
+        if row is not None:
+            out[row] = set(ents)
+    return out
+
+
+def _zscore_blocks(values: np.ndarray, lengths: np.ndarray) -> np.ndarray:
+    """Z-normalise within each impression's candidate pool, vectorised over a flat array.
+
+    The offline scorer z-scores *within each pool* (retrieval/fuse.py) because that is the
+    only scope where two scorers' scales need to agree. Same here. A pool with no spread
+    gets zeros rather than a division by ~0.
+    """
+    idx = np.repeat(np.arange(len(lengths)), lengths)
+    sums = np.bincount(idx, weights=values, minlength=len(lengths))
+    means = sums / lengths
+    dev = values - means[idx]
+    var = np.bincount(idx, weights=dev * dev, minlength=len(lengths)) / lengths
+    std = np.sqrt(var)
+    safe = np.where(std[idx] < 1e-12, 1.0, std[idx])
+    out = dev / safe
+    return np.where(std[idx] < 1e-12, 0.0, out)
+
+
 def stream_mind(cfg: dict, limit: int | None):
     root = INTERIM / "MINDlarge_test/MINDlarge_test"
     news = pl.read_csv(
@@ -206,6 +256,14 @@ def stream_mind(cfg: dict, limit: int | None):
     article_row = {a: i for i, a in enumerate(news["article_id"])}
     unknown = len(vectors) - 1
 
+    entity_alpha = cfg.get("entity_alpha", 0.0)
+    entity_sets: list[set] = []
+    if entity_alpha:
+        entity_sets = _mind_entity_sets(root, article_row, len(vectors))
+        covered = sum(1 for s in entity_sets if s)
+        print(f"  entity blend on: alpha={entity_alpha}, "
+              f"{covered:,}/{len(article_row):,} articles carry entities")
+
     prepared = _mind_parquet(root, article_row, unknown)
     scan = pl.scan_parquet(prepared)
     total = scan.select(pl.len()).collect().item()
@@ -217,10 +275,10 @@ def stream_mind(cfg: dict, limit: int | None):
         batch = scan.slice(offset, min(BATCH, total - offset)).collect()
         # Histories are already row indices, so deduplication is over tuples of ints.
         # Dedup is per slice: across slices identical histories are recomputed, which is
-        # the trade streaming makes for bounded memory. Mean-pooling 30 vectors is cheap.
+        # the trade streaming makes for bounded memory. Mean-pooling history_len vectors is cheap.
         order: dict[tuple, int] = {}
         index = np.fromiter(
-            (order.setdefault(tuple(h[-HISTORY_LEN:]), len(order))
+            (order.setdefault(tuple(h[-cfg["history_len"]:]), len(order))
              for h in batch["history_rows"]),
             dtype=np.int64, count=batch.height,
         )
@@ -235,6 +293,33 @@ def stream_mind(cfg: dict, limit: int | None):
         lengths = batch["cand_rows"].list.len().to_numpy().astype(np.int64)
         rows = batch["cand_rows"].explode().to_numpy().astype(np.int64)
         scores = score_pairs(rows, np.repeat(index, lengths), vectors, users)
+
+        if entity_alpha:
+            # User entity set is per distinct history, computed once per `order` entry for
+            # the same reason the user vector is: identical histories give identical sets.
+            user_entities: list[set] = [set() for _ in range(len(order))]
+            for key, i in order.items():
+                acc: set = set()
+                for r in key:
+                    if r != unknown:
+                        acc |= entity_sets[r]
+                user_entities[i] = acc
+
+            ent = np.empty(len(rows), dtype=np.float64)
+            per_cand_user = np.repeat(index, lengths)
+            for k in range(len(rows)):
+                ue = user_entities[per_cand_user[k]]
+                ce = entity_sets[rows[k]]
+                if ue and ce:
+                    inter = len(ue & ce)
+                    ent[k] = inter / (len(ue) + len(ce) - inter)
+                else:
+                    ent[k] = 0.0
+
+            # Blend on z-scores within each pool, matching retrieval/fuse.py's convention.
+            scores = (entity_alpha * _zscore_blocks(ent, lengths)
+                      + (1 - entity_alpha) * _zscore_blocks(scores.astype(np.float64), lengths))
+
         yield batch["impression_id"].to_numpy(), scores, lengths
 
 

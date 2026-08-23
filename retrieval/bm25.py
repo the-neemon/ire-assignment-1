@@ -6,8 +6,8 @@
              This is the "candidate generation to a few hundred" half of the spec.
 
 The query for both is the user's recent click history: the titles of their last
-HISTORY_LEN clicked articles, concatenated. History is already guaranteed strictly
-earlier than the impression by pipeline.split, so the query cannot leak.
+`history_len` clicked articles (per dataset config), concatenated. History is already
+guaranteed strictly earlier than the impression by pipeline.split, so the query cannot leak.
 
 Both tracks come out of a single scoring pass. Queries are deduplicated first — history
 is constant per user within a split, so the ~230k MIND impressions collapse to far fewer
@@ -36,7 +36,9 @@ ROOT = Path(__file__).resolve().parent.parent
 CONFIG = ROOT / "configs/datasets.yaml"
 PROC = ROOT / "data/processed"
 
-HISTORY_LEN = 30   # most recent clicks forming the query; news interest decays fast
+# Most recent clicks forming the query, per dataset config (`history_len`). News interest
+# decays fast, so how far back to look is a real per-dataset question, not one constant:
+# the sweep in docs/NOTES.md found EB-NeRD flat but MIND rising significantly to 100.
 TOP_K = 200        # "a few hundred candidates"
 OVERFETCH = 3      # fetch TOP_K*OVERFETCH before the publication-date filter thins it
 
@@ -83,20 +85,21 @@ def build_index(articles: pl.DataFrame, cfg: dict, fields: tuple[str, ...]):
     return index, stemmer
 
 
-def build_queries(impressions: pl.DataFrame, title_of: dict[str, str]) -> list[str]:
-    """Last HISTORY_LEN clicked titles per impression. Empty for cold-start users."""
+def build_queries(impressions: pl.DataFrame, title_of: dict[str, str], history_len: int) -> list[str]:
+    """Last `history_len` clicked titles per impression. Empty for cold-start users."""
     # I treat "what this user recently read" as the query and the corpus as documents, which
     # turns recommendation into ordinary ad-hoc retrieval. Titles only, and only the most
-    # recent HISTORY_LEN, because news interest decays fast and older clicks add drift.
+    # recent history_len, because news interest decays fast and older clicks add drift.
     return [
-        " ".join(title_of.get(a, "") for a in hist[-HISTORY_LEN:])
+        " ".join(title_of.get(a, "") for a in hist[-history_len:])
         for hist in impressions["history"].to_list()
     ]
 
 
 def score_split(index, stemmer, cfg, impressions, articles, position, published):
     """One pass over distinct queries, filling both tracks."""
-    queries = build_queries(impressions, dict(zip(articles["article_id"], articles["title"])))
+    title_of = dict(zip(articles["article_id"], articles["title"]))
+    queries = build_queries(impressions, title_of, cfg["history_len"])
 
     # A user's history is fixed within a split, so the same query text recurs across all of
     # that user's impressions. I map each distinct query to an id, then invert it into

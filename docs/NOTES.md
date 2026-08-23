@@ -499,6 +499,11 @@ distinct query ... a real inverted index with early termination becomes necessar
 confirmed by an attempt rather than argued from the code. Cost of the substitution is
 known and small: fused − emb was +0.0014 AUC on mind_small test.
 
+> **Superseded, 23 Aug.** "Not practical" was inferred from the operation count, never timed.
+> Measured, it is ~1.6 h (1.6 ms/query, see "Can `fused` ship on the MIND leaderboard?" below).
+> Expensive, not impossible. The paragraph above is kept as written so the correction is
+> visible rather than edited away.
+
 ### MIND streaming needed a columnar file first
 
 The first full MIND run was OOM-killed after 200k impressions. Cause: `stream_mind` read
@@ -840,5 +845,253 @@ candidate counts; zero rank lists that are not a permutation of 1..n. Zip contai
 float64 through an independent code path (dicts rather than the submitter's lookup arrays), with zero
 mismatches.
 
+### Rebuilt MIND leaderboard file (history_len=100, 23 Aug)
+
+The MIND entry still used the pre-sweep `history_len=30`, submitted 5 Aug and scored 0.6460 AUC (comp.
+13967, ID 892088). Rebuilt against the corrected config, no code change needed: `pipeline/submit.py`
+already read `cfg["history_len"]`, so this was purely a rerun once the config carried 100.
+
+| | impressions | wall | peak RSS | zip |
+|---|---|---|---|---|
+| MIND-large test, MiniLM 384-d, history_len=100 | 2,370,727 | **5m01s** | **1.27 GB** | 107.3 MB |
+
+Validated the same way as the EB-NeRD rebuild: all 2,370,727 lines checked against the test file's
+2,370,727 impressions and 93,115,001 candidate pairs, zero order/length/permutation failures, zip
+contains exactly `prediction.txt`. 40 random impressions re-ranked independently in float64 with
+`HISTORY_LEN` hardcoded to 100 rather than read from config, zero mismatches.
+
+The superseded file is kept as `mind_prediction.STALE-history_len30-scored-0.6460.zip`, named with
+the score it earned, same convention as the EB-NeRD rebuild.
+
+Not yet done: uploading this and recording its score. Offline, `history_len=100` bought MIND `emb`
++0.0030 AUC (0.6339 -> 0.6369) at val/test scale; a similarly modest gain is the expectation here,
+not a large jump, since nothing else about the system changed.
+
 The superseded file is kept as `ebnerd_predictions.STALE-xlmr-scored-0.5336.zip` rather than deleted,
 named with the score it earned so it cannot be confused with the current entry.
+
+## MIND encoder ablation: mpnet / BGE / E5 vs shipped MiniLM (21 Aug)
+
+Three retrieval-shaped alternatives to `all-MiniLM-L6-v2`, tested to see whether a bigger or
+retrieval-tuned model beats it on MIND specifically, given size predicted nothing in the EB-NeRD
+ablation. Encoded on Kaggle T4 (`notebooks/encode_articles.ipynb` §4): 65,238 articles, ~1.3-1.6
+min each on GPU against an estimated 2.4h each on this machine's CPU (measured on a 500-article
+sample of mpnet before deciding to move the job to Kaggle).
+
+| model | dim | trained for |
+|---|---|---|
+| `all-MiniLM-L6-v2` (ships) | 384 | general sentence similarity |
+| `all-mpnet-base-v2` | 768 | general sentence similarity, MiniLM's own family, larger |
+| `BAAI/bge-base-en-v1.5` | 768 | retrieval, hard-negative mined |
+| `intfloat/e5-base-v2` | 768 | retrieval; needs `"query: "`/`"passage: "` prefixes |
+
+E5 has no literal query text in this architecture (a "query" is the mean of history article
+vectors), so every article was prefixed uniformly `"passage: "` rather than exploiting the
+query/passage asymmetry it was trained on. Noted as a real limitation on the E5 result, not
+retroactively explaining it away.
+
+Semantic-only AUC, `mind_small` val, same `history_len=100`, same protocol as every other encoder
+ablation (`scratchpad/mind_encoder_ablation.py`, non-destructive, verified via checksum against
+`data/processed/mind_small/emb_val.parquet` before/after):
+
+| encoder | dim | val AUC | vs MiniLM (paired, 95% CI) |
+|---|---|---|---|
+| **MiniLM (shipped)** | 384 | **0.6356** [0.6331, 0.6380] | — |
+| mpnet | 768 | 0.6344 | -0.0012 [-0.0029, +0.0004], not significant |
+| e5 | 768 | 0.6067 | **-0.0289** [-0.0312, -0.0266], significant loss |
+| bge | 768 | 0.5899 | **-0.0457** [-0.0481, -0.0432], significant loss |
+
+**No candidate wins, and the AUC-vs-resource question has a clean answer: MiniLM dominates on
+both axes at once.** It ties the best 768-d alternative (mpnet) on AUC while costing half the
+FAISS index size and half the per-query cosine cost, and it beats the two retrieval-tuned models
+outright and by a wide margin. There is no tradeoff to weigh; MiniLM was already the better
+choice before resource cost even enters the argument.
+
+**BGE's loss is the more surprising one.** E5's loss has a stated architectural reason (the
+prefix mismatch); BGE has no equivalent excuse; it is a straightforward retrieval-tuned model
+that lost decisively (-0.0457 AUC, the largest single-encoder gap measured anywhere in this
+project) to a small general-purpose one on exactly the task it should suit. Consistent with the
+EB-NeRD finding that neither model size nor stated training purpose reliably predicts performance
+on mean-pooled cosine over short news text; only measurement does.
+
+No config change: `mind_small` keeps `all-MiniLM-L6-v2`. Recorded because a rejected idea with
+numbers is worth more than an untried one, same reasoning as the compound-splitting ablation.
+
+## MIND field ablation and XLM-R re-check, and three new candidate ablations (23 Aug)
+
+### XLM-R re-validated at history_len=100
+
+The MiniLM-vs-XLM-R comparison (docs/NOTES.md, "Computing our own embeddings") was measured at the
+pre-sweep `history_len=30`. Re-run at the shipped `history_len=100`:
+
+| encoder | val AUC | vs MiniLM |
+|---|---|---|
+| **MiniLM (shipped)** | 0.6356 [0.6331, 0.6380] | - |
+| xlmr | 0.6265 [0.6241, 0.6288] | -0.0090 [-0.0110, -0.0071], significant loss |
+
+Same conclusion as before (MiniLM wins), same order of magnitude gap (-0.0090 vs the earlier -0.0082
+at history_len=30). The choice was never actually in doubt at the new history_len; now confirmed
+rather than assumed. No change.
+
+### Field ablation on MIND (title vs title+abstract), previously untested
+
+`scratchpad/field_ablation.py mind_small`, val, `history_len=100`, non-destructive:
+
+| variant | vocab | AUC | nDCG@10 | recall@200 |
+|---|---|---|---|---|
+| **title** | 24,681 | **0.5864** [0.5840, 0.5887] | 0.3489 [0.3464, 0.3515] | **0.0388** [0.0374, 0.0402] |
+| title+abstract (ships) | 44,264 | 0.5840 [0.5814, 0.5865] | 0.3494 [0.3468, 0.3522] | 0.0371 [0.0357, 0.0384] |
+
+Paired, `title - title+abstract`: AUC +0.0024 [+0.0006, +0.0041] significant; nDCG@10 -0.0005
+[-0.0020, +0.0011] not significant; recall@200 +0.0017 [+0.0007, +0.0028] significant.
+
+**Different pattern from EB-NeRD.** There, title-only won re-ranking and *lost* retrieval (a real
+trade). Here, title-only wins both accuracy metrics that moved, and the one that didn't move
+(nDCG@10) shows no cost either way. No downside found. Candidate to ship: switch `mind_small`'s BM25
+document fields to title-only. Not yet applied, pending the fields-are-per-dataset config plumbing
+(currently `--fields` is a shared CLI flag, not a per-dataset config value like `history_len` is).
+
+Mechanism, consistent with the stemming/field findings elsewhere: MIND abstracts run longer relative
+to titles than EB-NeRD's, and the query is always title-only regardless of the document setting, so
+adding abstract text to the *document* side while the *query* stays short-form dilutes the register
+match on both tracks here, where on EB-NeRD's much smaller candidate pools the retrieval track still
+benefited from the extra vocabulary.
+
+### Entity overlap as a candidate signal — real, and worth adding
+
+Jaccard overlap between a candidate's entities and the union of the user's last `history_len`
+articles' entities (`scratchpad/entity_overlap_ablation.py`), MIND val, entities present for
+57,054/65,238 articles:
+
+Standalone: AUC **0.5370** [0.5344, 0.5394] (45,171/61,894 impressions had a nonzero score; the
+rest have no entity overlap to measure). Weak alone, as expected, but real signal above 0.5.
+
+Blended with the shipped `fused` score (z-normalised, `alpha*entity + (1-alpha)*fused`, swept on
+val): best at alpha=0.15, **+0.0011 [+0.0008, +0.0015] AUC over fused alone, significant.**
+
+**Measured again against `emb` alone, which is the number that actually matters**, since the
+leaderboard submission is embeddings-only and will stay that way (no `fused` submission wanted):
+best at alpha=0.20, **+0.0023 [+0.0018, +0.0027] AUC over emb alone, significant** — roughly twice
+the gain it showed on `fused`.
+
+That difference is itself the informative part: `fused` already contains BM25, and entity overlap is
+partly lexical (shared named entities usually means shared tokens), so blending entities onto `fused`
+double-counts signal that BM25 was already supplying. Against `emb` alone the entity axis is more
+nearly orthogonal and contributes more. A reminder that "how much is signal X worth" has no answer
+independent of what it is being added to.
+
+Candidate to ship as a second signal alongside `emb`; not yet wired into the pipeline or verified on
+test, this is a val-only finding by the same discipline every other choice here follows.
+
+### Pooling: mean vs max-similarity — mean confirmed as the right choice
+
+Alternative user representation: score a candidate by its best match to *any* single history item
+(`max_h cosine(vector(h), candidate)`) rather than cosine to the mean-pooled centroid
+(`scratchpad/max_pool_ablation.py`), MIND val:
+
+| pooling | val AUC |
+|---|---|
+| **mean (shipped)** | **0.6356** [0.6331, 0.6380] |
+| max-similarity | 0.6326 [0.6302, 0.6349] |
+
+Paired: -0.0030 [-0.0048, -0.0011], significant loss. The centroid is the better representation
+here; a user's single best-matching past article is a noisier signal than their average interest.
+No change. Recorded because a rejected idea with numbers is worth more than an untried one.
+
+### Cold-start fallback: popularity backoff — no significant effect, likely underpowered
+
+Tested falling back to train-click popularity (log1p of train click count) for the 1,503 true
+cold-start impressions in MIND val (2.4% of the split), against the shipped convention (all-zero
+score, no ranking invented) (`scratchpad/cold_start_fallback_ablation.py`):
+
+| | cold-slice AUC |
+|---|---|
+| zero-score (shipped) | 0.4929 [0.4766, 0.5081] |
+| popularity fallback | 0.4978 [0.4816, 0.5138] |
+
+Paired: +0.0049 [-0.0075, +0.0180], **not significant**. Both sit near 0.5 as expected (an all-tied
+score ranks essentially at random). The interval is wide, 1,503 impressions is a small slice, so
+this reads as underpowered rather than as proof popularity genuinely doesn't help; a larger cold
+slice (MIND-large, or accumulating across more of MIND-small) would be needed to resolve it either
+way. No change; recorded as inconclusive rather than negative.
+
+### Can `fused` ship on the MIND leaderboard? The "not practical" claim was wrong
+
+`NOTES.md` ("MIND submission is embeddings-only") and DESIGN_NOTE §10/§11 both assert BM25 cannot
+back the MIND leaderboard entry: `get_scores` is dense over the corpus per distinct query, and at
+~2M distinct MIND-large histories x 120,961 articles "that is ~10^11 operations and is not
+practical". That claim was argued from an operation count and never timed.
+
+Measured (`scratchpad/pool_restricted_bm25.py`, MIND val, single-threaded):
+
+| | |
+|---|---|
+| dense `get_scores` | **1.6 ms/query** over 65,238 articles (1,957 queries in 3.1s) |
+| extrapolated to MIND-large's 120,961-article corpus | ~2.9 ms/query |
+| x ~2M distinct histories | **~1.6 hours** |
+
+**~1.6 hours is slow, but it is not "not practical", and the earlier claim overstated the wall.**
+10^11 *operations* is not 10^11 *seconds*; `bm25s` is sparse and vectorised, so the per-query cost
+is milliseconds, not the seconds the operation count implies if read as scalar work. The honest
+statement is that BM25 at this scale is expensive enough to be an annoyance (comparable to the
+EB-NeRD submission's own 13m30s, but ~7x that), not that it is infeasible.
+
+What that means for the submission: **`fused` is very likely shippable on MIND** for the +0.0012 AUC
+it is worth offline, at a cost of roughly 1.6h of extra compute on top of the current 5m01s embedding
+run. Not done here, it needs `pipeline/submit.py` to grow a BM25 path (it currently streams the
+embedding scorer only) and that is a real code change, not a rerun. Recorded as a corrected estimate
+and a live option rather than a closed door.
+
+The pool-restriction idea specifically (score only the ~39 candidates per impression instead of all
+120,961 articles) does **not** work as a shortcut with `bm25s`: its public API is `get_scores` over
+the full corpus, with no per-document scoring entry point. That is a library limitation rather than
+an arithmetic one; a real inverted index with early termination (WAND) would expose exactly that,
+which is the §10 conclusion and still stands. The correction here is only to the *size* of the wall,
+not to its existence or to the direction of the fix.
+
+### Shipping the entity signal: val-selected, test-verified, wired into the submission
+
+The entity finding above was val-only, so before shipping it I selected alpha on **val** and
+reported it once on **test** with that alpha fixed (`scratchpad/entity_alpha_select.py`), the same
+discipline used for the fusion weight and every encoder choice:
+
+| | val | test |
+|---|---|---|
+| emb alone | 0.6356 | 0.6369 [0.6349, 0.6391] |
+| emb + entity (alpha=0.20) | 0.6378 | **0.6391** [0.6370, 0.6413] |
+| paired difference | +0.0023 | **+0.0022** [+0.0018, +0.0026], significant |
+
+**It generalises**, val +0.0023 against test +0.0022, which is the part that matters and the part
+EB-NeRD's fusion alpha conspicuously failed (§6: wins val, significantly loses test). Selecting on
+val and finding the gain intact on test is the difference between a real improvement and a tuned one.
+
+`entity_alpha: 0.20` now lives in `configs/datasets.yaml` under `mind_small` only. EB-NeRD has no
+`entity_alpha`: its entities are `ner_clusters` with different coverage and the signal is untested
+there, so it defaults to 0.0 and the EB-NeRD path is bit-for-bit unchanged.
+
+`pipeline/submit.py` gained an entity path in `stream_mind`: `_mind_entity_sets` (same JSON parse as
+`pipeline/split.py`) and `_zscore_blocks` (per-pool z-normalisation matching `retrieval/fuse.py`,
+vectorised over the flat batch array via `np.bincount` rather than a Python loop per impression).
+User entity sets are computed per *distinct history*, reusing the dedup `order` the user vectors
+already build, so the added cost is per-history rather than per-impression.
+
+Verified before the full run: a 20,000-impression smoke test re-checked against a fully independent
+recomputation, different JSON parser (`json.loads` rather than Polars `json_decode`), float64
+throughout, separate z-scoring, **zero mismatches over 40 random impressions**. That checks the
+parse, the blend, the z-scoring scope and the ranking together, not just the arithmetic.
+
+| MIND submission, entity-blended | impressions | wall | peak RSS | zip |
+|---|---|---|---|---|
+| MIND-large test, MiniLM 384-d, history_len=100, entity_alpha=0.20 | 2,370,727 | **4m38s** | **2.0 GB** | 107.3 MB |
+
+Cost of the entity blend: +0.7 GB peak RSS over the emb-only build (1.27 GB), and no wall-clock
+penalty at all (4m38s against 5m01s, inside run-to-run variance). All 2,370,727 lines validated for
+order, candidate count and rank permutation.
+
+The emb-only build is kept as `mind_prediction.EMBONLY-history_len100-unsubmitted.zip` (never
+uploaded, so named for what it is rather than a score), alongside the scored
+`mind_prediction.STALE-history_len30-scored-0.6460.zip`.
+
+**Still embeddings-only in the lexical sense**: no BM25, no `fused`, per the decision not to ship a
+fused submission. The entity signal is a second *content* axis blended onto embeddings, not the
+lexical axis returning by another name.

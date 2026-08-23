@@ -6,7 +6,7 @@ Only the scorer differs, so the lexical and semantic axes stay directly comparab
   re-rank    cosine between the user vector and each candidate in the given pool
   retrieval  FAISS inner-product search over the whole corpus for the top-K
 
-The user vector is the mean of the L2-normalised vectors of their last HISTORY_LEN clicked
+The user vector is the mean of the L2-normalised vectors of their last `history_len` clicked
 articles. History is guaranteed strictly earlier than the impression by pipeline.split.
 
 Article vectors come from whichever source the dataset has:
@@ -34,7 +34,7 @@ import polars as pl
 import yaml
 from tqdm import tqdm
 
-from retrieval.bm25 import HISTORY_LEN, OVERFETCH, TOP_K
+from retrieval.bm25 import OVERFETCH, TOP_K
 
 ROOT = Path(__file__).resolve().parent.parent
 CONFIG = ROOT / "configs/datasets.yaml"
@@ -111,11 +111,11 @@ def load_vectors(name: str, cfg: dict, articles: pl.DataFrame) -> np.ndarray:
     return vectors / (np.linalg.norm(vectors, axis=1, keepdims=True) + 1e-9)
 
 
-def score_split(impressions, articles, vectors, position, published):
+def score_split(impressions, articles, vectors, position, published, history_len):
     """One pass over distinct histories, filling both tracks."""
     # Same deduplication idea as bm25.py, but keyed on the history tuple itself rather than
     # rendered query text, since here the history IS the input. Tuples so they can be dict keys.
-    histories = [tuple(h[-HISTORY_LEN:]) for h in impressions["history"].to_list()]
+    histories = [tuple(h[-history_len:]) for h in impressions["history"].to_list()]
 
     order: dict[tuple, int] = {}
     per_impression = []
@@ -190,7 +190,7 @@ def run(name: str, cfg: dict, splits: list[str]) -> None:
         impressions = pl.read_parquet(PROC / name / f"impressions_{split}.parquet")
         print(f"  {split}: {impressions.height:,} impressions")
         cand_scores, retrieved = score_split(
-            impressions, articles, vectors, position, published
+            impressions, articles, vectors, position, published, cfg["history_len"]
         )
 
         pl.DataFrame({
