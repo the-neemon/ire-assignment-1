@@ -1,0 +1,351 @@
+\documentclass[10pt,a4paper]{article}
+
+\usepackage[T1]{fontenc}
+\usepackage[utf8]{inputenc}
+\usepackage{lmodern}
+\usepackage[margin=1.5cm,columnsep=6mm]{geometry}
+\usepackage{booktabs}
+\usepackage{titlesec}
+\usepackage{xcolor}
+\usepackage{microtype}
+\usepackage{multicol}
+\usepackage{enumitem}
+\usepackage{amsmath}
+\usepackage{amssymb}
+\usepackage[hidelinks]{hyperref}
+
+% Compact, clearly-ranked headings.
+\definecolor{accent}{HTML}{8A1538}
+\titleformat{\section}{\normalfont\bfseries\color{accent}}{\thesection.}{0.5em}{}
+\titlespacing*{\section}{0pt}{1.6ex plus .3ex minus .2ex}{0.7ex}
+
+\setlength{\parindent}{0pt}
+\setlength{\parskip}{0.55ex plus 0.15ex}
+\linespread{1.02}
+
+% Tables: small, tight, booktabs rules.
+\newcommand{\tabsize}{\footnotesize}
+\setlength{\tabcolsep}{4pt}
+\renewcommand{\arraystretch}{1.05}
+
+% Confidence interval, set once so every occurrence matches.
+\newcommand{\ci}[2]{{\scriptsize[#1,\,#2]}}
+
+\pagestyle{plain}
+
+\begin{document}
+
+\begin{center}
+  {\large\bfseries Component-1 Design Note}\\[0.3ex]
+  {\small Lexical \& semantic retrieval on EB-NeRD and MIND}
+\end{center}
+\vspace{-0.5ex}
+\hrule
+\vspace{1ex}
+
+\begin{multicols}{2}
+
+\section{What was built}
+
+A config-driven pipeline from raw archives to metric reports in one command (\texttt{make data} for
+Q1's feature store, \texttt{make all} for everything) across \textbf{EB-NeRD demo}
+(49k impressions/1,590 users), \textbf{EB-NeRD small} (478k/15,143) and \textbf{MIND-small}
+(230k/50,000). Both normalise into one schema (\texttt{impressions\_*.parquet}: id, user, timestamp,
+candidates[], clicked[], history[]; \texttt{articles.parquet}: id, title, abstract, body, category,
+entities[]), one code path rather than a Danish branch and an English one. \texttt{entities}
+normalises two source shapes into one \texttt{List(String)} (74\%/87\% non-empty).
+
+Three scorers run over that schema, \textbf{bm25}, \textbf{emb}, \textbf{fused}, on two tracks:
+\textbf{re-rank} (score the pool the log actually showed; leaderboard-comparable) and
+\textbf{retrieval} (ignore the pool, pull the top-200 from the whole corpus, the ``candidate
+generation to a few hundred'' the spec asks for). The query for both is the user's last 30 clicked
+titles; the harness's own metrics are in \S7.
+
+\section{Temporal split}
+
+Both datasets ship their own train/test boundary, so I adopted it as \texttt{test\_start} rather than
+inventing one, and carved \texttt{val} out of the earlier block by time (EB-NeRD small
+train/val/test: 168,522/64,365/244,647; MIND-small: 95,071/61,894/73,152 impressions). EB-NeRD's day
+boundary is \textbf{07:00}, not midnight, a detail that only shows up in the data.
+
+EB-NeRD ships a separate \texttt{history.parquet} per block whose window ends exactly where its
+impressions begin, so the behaviour-window boundary is given rather than guessed (NOTES.md,
+\S splits, for the alternative considered and rejected).
+
+\textbf{Enforcement, not discipline.} \texttt{split.py} asserts on every build, failing rather than
+warning: strict \texttt{train < val < test}, history-precedes-impression, \texttt{clicked} a subset
+of \texttt{candidates}, every candidate resolves. Where impossible it says so: MIND's history has no
+per-item timestamps, so the guarantee there is structural rather than verified, not passed vacuously.
+
+\texttt{tests/test\_leakage.py} (\texttt{make test}, 19 tests, ${\sim}$20s) re-checks the same
+properties from \emph{outside}, reading only \texttt{data/processed/}: the build asserts what it
+meant to write, the tests assert what is on disk, plus two checks that exist only there
+(\texttt{datasets.yaml} cutoffs still match the artifacts; no module outside \texttt{eval/run.py}
+mentions a serving-unavailable column). Verified non-vacuous by injecting a future click and watching
+it fire.
+
+\section{Lexical axis}
+
+\texttt{bm25s} over title+abstract with a per-dataset Snowball stemmer (\texttt{rank\_bm25} scores one
+query at a time in pure Python, unusable at 65k documents; Pyserini/Lucene scales further but drags in
+a JVM).
+
+\textbf{Stemming is not free, and not what I assumed.} The brief specifies no preprocessing, so this
+was my choice. On val, \texttt{stem - none} is \textbf{+0.0019} \ci{+0.0007}{+0.0029} \textbf{AUC on
+MIND, zero on EB-NeRD, and significantly \emph{negative} on recall@200 for both} ($-0.0020$,
+$-0.0023$): it trades precision for variant-matching, worth it ordering ${\sim}8$ candidates, harmful
+picking 200 from 20,738. Kept as right for the headline metric, but a track-dependent trade. Danish
+compound splitting from corpus vocabulary fired on 15\% of tokens and made both \textbf{worse}:
+decompounding needs a lexicon, not statistics.
+
+\textbf{The finding that mattered.} EB-NeRD first scored AUC \textbf{0.5035}, random. Rather than
+report that, I checked whether it was my bug: an \textbf{oracle test} (query = the clicked article's
+own title) ranked it \#1 in 300/300 impressions at AUC 0.9990, and a history-length sweep was flat,
+ruling out misalignment and query dilution. MIND worked at 0.58; that asymmetry located the cause:
+\textbf{bm25s ships no Danish stopword list}, so thirty concatenated Danish titles were mostly
+function words. The Snowball list moved EB-NeRD to \textbf{0.5232}. A missing stopword list is silent,
+it degrades without erroring.
+
+\section{Semantic axis}
+
+MIND encodes title+abstract with \texttt{all-MiniLM-L6-v2} (\textbf{11m16s}, cached once,
+65,238-article union across its two files). User vectors are the mean of last-30 history vectors,
+L2-normalised; scoring is cosine with FAISS \texttt{IndexFlatIP} (exact at this scale; IVF/PQ deferred
+to $10\times$ analysis).
+
+\textbf{The encoder is a measurement, not a preference.} Q3 allows the provided article vectors
+\emph{or} your own from BERT/XLM-RoBERTa, so I ran the identical pipeline on each candidate: same
+splits, same BM25, same fusion, only the article vectors differ. Selection is on \textbf{val}, since
+selecting on test tunes a choice on the number being reported. Semantic-only AUC,
+\texttt{ebnerd\_small} val, against BM25's 0.5205:
+
+\begin{center}\tabsize
+\begin{tabular}{@{}llcl@{}}
+\toprule
+encoder & arm & dim & val AUC \\
+\midrule
+\textbf{contrastive\_vector} \emph{(ships)} & prov. & 768 & \textbf{0.5506} \ci{.5480}{.5531} \\
+paraphrase-mpnet (XLM-R) & own & 768 & 0.5309 \ci{.5282}{.5336} \\
+\texttt{Ekstra\_Bladet\_word2vec} & prov. & 300 & 0.5098 \ci{.5073}{.5124} \\
+\texttt{bert\_base\_multiling.} & prov. & 768 & 0.4857 \ci{.4832}{.4880} \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+The top two beat BM25; word2vec loses; mBERT is \textbf{below random}.
+
+\textbf{On shipping \texttt{contrastive\_vector}:} it is an official EB-NeRD artifact from the same
+\texttt{artifacts/} folder as the other two, so it sits in Q3's ``provided article embeddings'' arm,
+word2vec and mBERT are that arm's named examples, not its full extent. Strongest EB-NeRD encoder
+measured, by +0.0197 val AUC over my own XLM-R, gap well outside both intervals.
+
+One property predicts all four: \textbf{was the model trained so cosine distance means topical
+similarity?} Contrastive training optimises exactly that and wins; XLM-R paraphrase fine-tuning
+approximates it and comes second; word2vec (predict neighbouring words) does not; raw mBERT (fill in
+blanks) emphatically does not, its vectors sitting in a narrow cone where everything looks alike. Size
+predicts nothing: the 300-d model beats one 768-d model. Fusion detects the mBERT failure unprompted,
+tuning alpha to 0.00 on demo, discarding the semantic axis outright.
+
+\textbf{MIND kept MiniLM, and that is the sharper lesson.} Against the same XLM-R, MiniLM wins on
+\textbf{val} (0.6338 vs 0.6256) and \emph{loses} on \textbf{test} (0.6339 vs 0.6364), a real reversal,
+near-disjoint intervals. The rule was fixed before looking, so MiniLM stays; ``take the better test
+number'' would have flipped it, costing 0.0025 test AUC to obey, the entire point of having a rule. An
+English specialist beats a 50-language generalist on English, while that generalist beats a 2013
+word-vector model on Danish.
+
+\section{Candidate generation: recall@K, and a split-dependent winner}
+
+Recall@K over the \textbf{full catalogue}, not the pool the log showed, is what measures candidate
+generation: the share of an impression's clicked articles found in the top K. Cold-start impressions
+retrieve nothing and score 0 rather than being excluded, since a retriever that cannot serve a user has
+failed for that user.
+
+\begin{center}\tabsize
+\begin{tabular}{@{}lccl@{}}
+\toprule
+recall@200 & bm25 & emb & emb $-$ bm25 \\
+\midrule
+EB-NeRD sm. \textbf{val} & \textbf{.0214} & .0198 & $\mathbf{-.0016}$ \ci{-.0030}{-.0002} \\
+EB-NeRD sm. \textbf{test} & .0247 & \textbf{.0277} & $\mathbf{+.0030}$ \ci{+.0022}{+.0039} \\
+MIND-small test & .0220 & \textbf{.0239} & $+.0019$ \ci{+.0008}{+.0031} \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\emph{(small; demo tracked it within noise, \S8)}
+
+\textbf{On EB-NeRD the retrieval winner flips between val and test, both directions significant}: BM25
+wins val, embeddings win test, same code, same K, a sign change with disjoint intervals, not noise.
+MIND shows no such flip. \S6 finds the identical pattern in the fusion weight, pointing at the dataset:
+val is a 2-day window against test's 7, each with its own history window, so the lexical/semantic
+relationship genuinely drifts, two weeks is a different news distribution.
+
+\textbf{Re-ranking and retrieving stay different jobs, by margin now, not direction.} The same
+contrastive vectors beat BM25 by \textbf{+0.0289} AUC ordering the pool and by only \textbf{+0.0030}
+recall@200 searching all 20,738 articles, a $10\times$ gap for the same encoder and split, evidence for
+different signals per stage. Absolute recall is low everywhere (2--5\%), \S8 explains why, a property
+of the corpus, not the retriever.
+
+\section{Fusion, an addition the brief did not ask for}
+
+Q3 asks only to \emph{compare} lexical and semantic; this third system is mine. BM25 scores and cosines
+are on different scales, and BM25's moves with query length, so both are z-normalised \textbf{within
+each candidate pool} and mixed $\alpha\cdot\text{emb} + (1-\alpha)\cdot\text{bm25}$, $\alpha$ tuned on
+\textbf{val}, applied unchanged to test.
+
+\begin{center}\tabsize
+\begin{tabular}{@{}lcccl@{}}
+\toprule
+AUC & bm25 & emb & fused & fused $-$ emb \\
+\midrule
+EB sm. \textbf{val} & .5205 & .5506 & \textbf{.5528} & $\mathbf{+.0022}$ \ci{+.0010}{+.0033} \\
+EB sm. \textbf{test} & .5107 & \textbf{.5397} & .5380 & $\mathbf{-.0017}$ \ci{-.0023}{-.0011} \\
+MIND test & .5685 & .6369 & \textbf{.6381} & $\mathbf{+.0012}$ \ci{+.0005}{+.0018} \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\emph{($\alpha$ = 0.70, 0.70, 0.75 respectively)}
+
+\textbf{On EB-NeRD fusion wins on val and significantly loses on test, on both bundles}: the alpha
+chosen on val does not generalise across the boundary. This is the same reversal \S5 finds in
+retrieval, reached through a different measurement, a property of EB-NeRD, not an artefact of either
+method.
+
+Consequently \textbf{the reported EB-NeRD system is embeddings alone}, and only MIND ships fused.
+Fusion still earns its place: it is the mechanism that \emph{detected} the instability, and on MIND it
+is a real if small win. Judged on val alone, the tempting shortcut, I would have shipped fusion on all
+three and been wrong on two.
+
+\textbf{\texttt{history\_len} was shared across datasets and shouldn't have been.} A sweep on MIND val
+found the constant (30) truncating a real tail: MIND's median history is 20, not EB-NeRD's 258, so 30
+discarded signal rather than noise. AUC rose significantly to 100 clicks (bm25 +0.0039, emb +0.0018)
+then plateaued exactly there. EB-NeRD's own sweep (\S3) was flat over the same range, so it stays at
+30; \texttt{history\_len} is now per-dataset in config. This table reflects the corrected MIND value.
+
+\textbf{A second MIND-only signal, entity overlap, ships alongside \texttt{emb}.} MIND's entities are
+clean and Wikidata-linked; a candidate's Jaccard overlap with the user's recent-history entities,
+blended onto \texttt{emb} ($\alpha\cdot\text{entity} + (1-\alpha)\cdot\text{emb}$), was selected on val
+(0.20) and checked once on test: \textbf{+0.0022} \ci{+0.0018}{+0.0026} \textbf{AUC}, holding almost
+exactly (val +0.0023), unlike the fusion alpha above. Not tried on EB-NeRD, its entities are a
+different extraction (\texttt{ner\_clusters}) with different coverage.
+
+\section{Evaluation harness}
+
+Metrics are computed \textbf{per impression}: slicing is a mask over that vector, bootstrapping
+resamples it over impressions, the approximately-independent unit. Comparisons use a \textbf{paired}
+bootstrap on shared resamples, since two systems on the same impressions have correlated errors, an
+unpaired comparison of independent intervals is far too conservative.
+
+\textbf{Cold-start needed a defensible definition.} ``Empty history'' fails on EB-NeRD (zero such
+users, median 258), so the harness uses a per-dataset bottom-decile threshold plus the true
+zero-history slice where one exists; MIND's scores 0.5125 identically across systems, correctly, no
+history means no ranking invented.
+
+Beyond-accuracy over the top-10: category intra-list diversity, novelty as self-information against
+\emph{train} click shares, coverage, sobering at \textbf{5--21\%} of the catalogue ever surfaced.
+
+\section{Observations}
+
+\textbf{Content signals are weak here, and that is the result, not a failure.} MIND reaches 0.6391
+(\S6), within reach of published neural baselines for MIND-small ($\sim$0.65--0.67), unsupervised.
+EB-NeRD tops out at 0.5397: pools are much smaller (median 8--9 vs MIND's 23--26) and drawn from a
+tight recency window, so candidates are already plausible, little for content to separate.
+
+\textbf{Simple behavioural features are not the shortcut they look like.} Train-click popularity
+scores \emph{below} random on EB-NeRD (0.459), the pool is already popularity-filtered.
+
+\textbf{Demo was representative.} Every system landed within 0.002 of its demo value at $10\times$ the
+users; the extra data bought precision, CIs tightened from $\pm0.0040$ to $\pm0.0013$, deciding fusion.
+
+\textbf{The retrieval track is weak regardless of scorer} (recall@200 of 2--5\%): EB-NeRD's corpus
+spans 1998--2023 while impressions are one week in May 2023, and the publication filter removes only
+\emph{future} articles, not stale ones. A recency window on the retrievable corpus is the obvious C2
+lever.
+
+\section{Anti-gaming and serving availability}
+
+\texttt{total\_inviews}/\texttt{total\_pageviews}/\texttt{total\_read\_time} are lifetime aggregates
+over the whole collection period, embedding the future, and cannot be computed at serving time. Carried
+into the corpus \textbf{only} so the harness can quantify them; no shipped scorer reads them. Test AUC
+without/with popularity: EB-NeRD demo $0.5300 \rightarrow 0.5728$, EB-NeRD small $0.5291 \rightarrow
+0.5731$ (+0.0440 \ci{+0.0431}{+0.0449}).
+
+\textbf{One serving-unavailable feature is worth +0.044, more than twice the semantic axis (+0.0198,
+\S6), the largest legitimate win here}; any comparison quietly including it is not the same system.
+
+Also enforced, not trusted: post-click engagement columns are dropped at the split, and retrieval
+filters \texttt{published\_time <= impression\_time} (867 EB-NeRD articles postdate the test window).
+
+\section{Where it breaks at $10\times$, measured, not projected}
+
+The leaderboard submission made this section measured rather than hypothetical: Codabench scores
+\texttt{ebnerd\_testset} at \textbf{13.5M impressions, 205,925,868 candidate pairs, $28\times$
+\texttt{ebnerd\_small}}.
+
+\textbf{Memory is the wall, and it is one specific idiom.} Three separate times the break was
+\texttt{.to\_list()} pulling Arrow into boxed Python objects: \texttt{np.vstack(col.to\_list())} peaks
+at \textbf{5.8\,GB to build a 385\,MB array}, the same idiom OOM-killed the harness at 10\,GB RSS
+adding recall@K. \texttt{explode().to\_numpy()} plus Polars set intersections fixed all three,
+byte-identically.
+
+\textbf{Streaming works and costs little.} \texttt{pipeline/submit.py} scores in 200k-impression
+slices: peak RSS stays \textbf{flat against dataset size, not linear}, in \textbf{13m30s} (33m28s at
+the same peak under the earlier XLM-R build); MIND-large's 2.4M took 6m05s at 1.3\,GB. Slice pushdown
+reaches the parquet row groups, so an offset-13M slice costs the same as one at 0; without it streaming
+would be $O(n^2)$. MIND needed a one-off TSV$\rightarrow$parquet conversion, CSV has no such pushdown
+and OOM-killed the first attempt.
+
+\textbf{BM25 is expensive, and I first overstated by how much.} \texttt{get\_scores} is dense over the
+whole corpus per query; ${\sim}$2M MIND-large histories $\times$ 120,961 articles I originally called
+impractical on the ${\sim}10^{11}$ operation count alone. Timed: 1.6\,ms/query, extrapolating to
+\textbf{${\sim}$1.6\,h}, roughly $7\times$ the embedding submission's runtime, slow but not a wall.
+Operation counts are not wall-clock for a sparse, vectorised kernel; I should have measured first. The
+fix is unchanged: a dense per-query scorer is the wrong shape here, and WAND-style early termination
+removes the cost. Projected at \texttt{ebnerd\_large} (600M): FAISS flat is $O(N\!\cdot\!d)$/query,
+needing IVF-PQ with $\texttt{nlist} \sim \sqrt{N}$.
+
+\section{Leaderboard submissions}
+
+Both competitions score held-out sets far larger than the splits above (\texttt{ebnerd\_testset} 13.5M
+impressions, MIND-large test 2.4M), streamed by \texttt{pipeline/submit.py} (\S10), unchanged scoring
+semantics. \textbf{Both entries are embeddings-only, not \texttt{fused}}: on EB-NeRD that \emph{is} the
+reported system (\S6); on MIND, BM25 would cost ${\sim}$1.6h for +0.0012 AUC (\S10), a deliberate
+trade, reported as a different system rather than letting \texttt{fused}'s number stand in.
+
+Final entries, with the organisers' own per-metric output:
+
+\begin{center}\tabsize
+\begin{tabular}{@{}llcccc@{}}
+\toprule
+ & sub. & AUC & MRR & n@5 & n@10 \\
+\midrule
+\textbf{EB-NeRD} \emph{(rk 138)} & 895220 & \textbf{.5381} & .3521 & .3868 & .4669 \\
+\textbf{MIND} \emph{(rk 36)} & 898179 & \textbf{.6503} & .3198 & .3454 & .4010 \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+Superseded: EB-NeRD 893893 (0.5336, XLM-R encoder) and MIND 892088 (0.6460,
+\texttt{history\_len=30}, no entity blend); both improved on by the finals above.
+
+\textbf{Each score reads against the offline number for the system that produced it.} 895220
+(post-switch) against offline \texttt{ebnerd\_demo} \texttt{emb} test, 0.5418: leaderboard
+\textbf{$-0.0037$}, unremarkable, a larger independent population regressing toward the mean. 898179
+against offline \texttt{emb+entity} test, 0.6391: leaderboard \textbf{$+0.0112$}, the reassuring
+direction. (An earlier draft mis-mapped 893893 to the wrong encoder here; dropped rather than
+repeated.)
+
+\textbf{MIND's MRR is the one metric that moved against us}, 0.3198 official vs 0.3520 offline, while
+AUC and both nDCGs rose, consistently across every MIND submission: a definitional gap, not noise.
+\texttt{eval/metrics.py} takes the \emph{first} clicked article's reciprocal rank; averaging over
+\emph{all} clicks scores multi-click impressions lower while leaving AUC and nDCG intact. Unverifiable
+without the organisers' scorer, so recorded rather than resolved.
+
+Both validated pre-upload: every line a correct-length rank permutation in test-file row order, plus 40
+re-ranked independently in float64. Excluded: 897967 (MIND, 0.5012), a \texttt{--limit} smoke test that
+overwrote the real file. \textbf{Evidence:} \texttt{deliverable/leaderboard\_screenshots/},
+\texttt{deliverable/\{ebnerd,mind\}\_scoring\_result/}.
+
+\end{multicols}
+\end{document}

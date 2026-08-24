@@ -682,7 +682,7 @@ Four things to be able to say about this:
 - `NOTES.md` (same folder) is the evidence trail: measured schemas, every decision, every
   ablation with its confidence intervals. Longer and denser than this, and the place to go when
   you want the numbers behind a claim rather than the explanation of it.
-- `../deliverable/DESIGN_NOTE.md` is the 4-page write-up that gets graded.
+- `../deliverable/design_note_c1.pdf` is the 4-page write-up that gets graded (LaTeX source alongside it).
 - `../results/` holds the generated reports, one per dataset and split.
 
 If you find a disagreement between this file and `NOTES.md`, trust `NOTES.md`: it is written as

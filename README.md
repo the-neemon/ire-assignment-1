@@ -6,7 +6,7 @@ offline evaluation harness with bootstrap confidence intervals.
 
 New to the project? Read `docs/WALKTHROUGH.md` first: it explains what the system does and why,
 end to end, in plain English. `docs/NOTES.md` is the evidence trail (measured data facts and every
-decision's justification), `deliverable/DESIGN_NOTE.md` is the write-up, and `results/` holds the
+decision's justification), `deliverable/design_note_c1.pdf` is the write-up, and `results/` holds the
 generated metric reports.
 
 ## Run it
@@ -58,8 +58,8 @@ docs/WALKTHROUGH.md       how the system works and why, plain English — start 
 docs/NOTES.md             measured facts, every decision, every ablation
 docs/GLOSSARY.md          every term in the assignment, defined
 
-deliverable/DESIGN_NOTE.md      the write-up (<=4 pages)
-deliverable/design_note_c1.pdf  rendered, via build_design_note.sh
+deliverable/design_note_c1.tex  the write-up, LaTeX source (<=4 pages)
+deliverable/design_note_c1.pdf  the graded deliverable; rebuild with `xelatex design_note_c1.tex`
 deliverable/submissions/        the two Codabench zips
 
 brief/Assignment1_v1.pdf  the authoritative assignment text

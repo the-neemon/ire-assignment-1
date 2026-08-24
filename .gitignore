@@ -19,3 +19,14 @@ __pycache__/
 
 # Awaiting review before commit.
 deliverable/AI_USAGE_LOG.md
+
+# LaTeX build intermediates. design_note_c1.tex is the source and is tracked;
+# the PDF is tracked because it is the graded deliverable. Everything xelatex
+# emits alongside them is regenerable and is not.
+*.aux
+*.log
+*.out
+*.toc
+*.fls
+*.fdb_latexmk
+*.synctex.gz

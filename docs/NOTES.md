@@ -561,7 +561,7 @@ have been the worse trade.
 - every EB-NeRD row in the results table above, and all four `results/ebnerd_*.{md,json}`
 - the fusion alphas: 0.70 -> 0.30 (demo) and 0.20 (small), because the semantic axis now deserves
   less weight
-- three conclusions in `deliverable/DESIGN_NOTE.md` that reversed sign, rewritten rather than softened:
+- three conclusions in the design note (then `DESIGN_NOTE.md`, now `design_note_c1.tex`) that reversed sign, rewritten rather than softened:
   §5 (BM25 now out-retrieves embeddings on EB-NeRD at every K), §6 (fusion is no longer rejected on
   EB-NeRD — it now wins where the comparison is powered), §11 (the submitted EB-NeRD system is now
   the *weakest* of the three measured, since embeddings-only lost to BM25)
