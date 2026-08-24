@@ -204,11 +204,10 @@ array**, the same idiom OOM-killed the harness at 10 GB RSS adding recall@K. `ex
 plus Polars set intersections fixed all three, byte-identically.
 
 **Streaming works and costs little.** `pipeline/submit.py` scores in 200k-impression slices: peak RSS
-stays **flat against dataset size, not linear**, in **13m30s** on the current contrastive-vector build
-(33m28s at the same peak RSS under the earlier XLM-R build); MIND-large's 2.4M took 6m05s at 1.3 GB.
-Slice pushdown reaches the parquet row groups, so an offset-13M slice costs the same as one at 0;
-without it streaming would be O(n²). MIND needed a one-off TSV→parquet conversion first, CSV has no
-such pushdown and OOM-killed the first attempt reading it whole (3.07 GB to parse).
+stays **flat against dataset size, not linear**, in **13m30s** (33m28s at the same peak under the
+earlier XLM-R build); MIND-large's 2.4M took 6m05s at 1.3 GB. Slice pushdown reaches the parquet row
+groups, so an offset-13M slice costs the same as one at 0; without it streaming would be O(n²). MIND
+needed a one-off TSV→parquet conversion, CSV has no such pushdown and OOM-killed the first attempt.
 
 **BM25 is expensive, and I first overstated by how much.** `get_scores` is dense over the whole
 corpus per query; ~2M MIND-large histories x 120,961 articles I originally called impractical on the
@@ -223,15 +222,18 @@ is O(N·d)/query, needing IVF-PQ with `nlist ~ sqrt(N)`.
 Both competitions score held-out sets far larger than the splits above (`ebnerd_testset` 13.5M
 impressions, MIND-large test 2.4M), streamed by `pipeline/submit.py` (§10), unchanged scoring
 semantics. **Both entries are embeddings-only, not `fused`**: on EB-NeRD that *is* the reported system
-(§6); on MIND, BM25 would cost ~1.6h on top of the 5min run (§10) for +0.0012 AUC, a deliberate trade
-reported as a different system rather than letting `fused`'s number stand in for what was uploaded.
+(§6); on MIND, BM25 would cost ~1.6h for +0.0012 AUC (§10), a deliberate trade, reported as a
+different system rather than letting `fused`'s number stand in.
 
-| | submission | AUC | status |
-|---|---|---|---|
-| EB-NeRD (RecSys 2024, comp. 2469) | 893893 | 0.5336 | superseded, XLM-R encoder |
-| **EB-NeRD (final)** | **895220** | **0.5381** | current pipeline, `contrastive_vector` |
-| MIND (comp. 13967) | 892088 | 0.6460 | superseded, `history_len=30`, embeddings-only |
-| **MIND (final)** | **898179** | **0.6503** | current pipeline, `history_len=100` + entity blend (§6) |
+Final entries, with the organisers' own per-metric output (`deliverable/*_scoring_result/`):
+
+| | submission | AUC | MRR | nDCG@5 | nDCG@10 |
+|---|---|---|---|---|---|
+| **EB-NeRD** (comp. 2469, rank 138) | **895220** | **0.5381** | 0.3521 | 0.3868 | 0.4669 |
+| **MIND** (comp. 13967, rank 36) | **898179** | **0.6503** | 0.3198 | 0.3454 | 0.4010 |
+
+Superseded: EB-NeRD 893893 (0.5336, XLM-R encoder) and MIND 892088 (0.6460, `history_len=30`,
+no entity blend); both improved on by the finals above.
 
 **Each score reads against the offline number for the system that produced it.** 895220 (post-switch)
 against offline `ebnerd_demo` `emb` test, 0.5418: leaderboard **−0.0037**, unremarkable, a larger
@@ -239,7 +241,13 @@ independent population regressing toward the mean. 898179 against offline `emb+e
 leaderboard **+0.0112**, the reassuring direction. (An earlier draft mis-mapped 893893 to the wrong
 encoder here; dropped rather than repeated.)
 
-Both validated before upload: every line a correct-length rank permutation in test-file row order,
-plus 40 re-ranked independently in float64. Excluded: 897967 (MIND, 0.5012), a `--limit` smoke test
-that overwrote the real file pre-upload, scoring 2.37M candidates unranked; `submit.py` now isolates
-smoke tests to their own path. **Screenshots:** *(893893, 895220, 892088, 898179)*
+**MIND's MRR is the one metric that moved against us**, 0.3198 official vs 0.3520 offline, while AUC
+and both nDCGs rose, consistently across every MIND submission: a definitional gap, not noise.
+`eval/metrics.py` takes the *first* clicked article's reciprocal rank; averaging over *all* clicks
+scores multi-click impressions lower while leaving AUC and nDCG intact. Unverifiable without the
+organisers' scorer, so recorded rather than resolved.
+
+Both validated pre-upload: every line a correct-length rank permutation in test-file row order, plus
+40 re-ranked independently in float64. Excluded: 897967 (MIND, 0.5012), a `--limit` smoke test that
+overwrote the real file. **Evidence:** `deliverable/leaderboard_screenshots/`,
+`deliverable/{ebnerd,mind}_scoring_result/`.

@@ -1151,3 +1151,41 @@ unremarkable and in the expected direction for a larger independent population. 
 real-file incident recorded above, not a measurement of any real system.
 
 No further ablations planned; this is the final reported state of both leaderboard entries.
+
+### Official scoring output archived and cross-checked (24 Aug)
+
+Leaderboard screenshots and the organisers' raw scoring output for both final submissions are
+committed under `deliverable/leaderboard_screenshots/` and `deliverable/{ebnerd,mind}_scoring_result/`.
+Both scoring runs exited cleanly (`exitCode: 0`; EB-NeRD 8,678s, MIND 425s).
+
+Every metric cross-checked three ways, screenshot against scoring file against design note:
+
+| | submission | AUC | MRR | nDCG@5 | nDCG@10 | rank |
+|---|---|---|---|---|---|---|
+| EB-NeRD | 895220 | 0.5381 | 0.3521 | 0.3868 | 0.4669 | 138 |
+| MIND | 898179 | 0.6503 | 0.3198 | 0.3454 | 0.4010 | 36 |
+
+All eight agree exactly (EB-NeRD's file gives 0.538056/0.352062/0.386802/0.466928, rounding to the
+displayed 4dp; MIND's 0.650320/0.319829/0.345360/0.401006).
+
+**Two corrections made while verifying**, both worth recording rather than silently fixing:
+
+1. The screenshot files were **swapped**: `ebnerd.png` held the MIND row (898179, `comp. 13967`) and
+   `mind.png` held the EB-NeRD row (895220, `895220_RecSys24_competition_v5`). Caught by reading the
+   images rather than trusting the filenames; renamed. The metrics inside were correct throughout, so
+   this was a labelling error only, but a submitted design note pointing at a mislabelled screenshot
+   is exactly the kind of thing that reads as a fabricated result.
+2. DESIGN_NOTE §11 listed only AUC for the finals and carried a `**Screenshots:** *(...)*` placeholder
+   naming four submission ids, two of which were never captured. Replaced with the full official
+   per-metric table and a pointer to the committed evidence.
+
+**One genuine discrepancy, recorded not resolved:** MIND's official MRR is 0.3198 against 0.3520
+offline, while AUC and both nDCGs came in *above* offline. The gap is consistent across every MIND
+submission, so it is definitional rather than noise: `eval/metrics.py` scores the reciprocal rank of
+the *first* clicked article, whereas an implementation averaging over *all* clicked articles scores
+multi-click impressions lower while leaving AUC and nDCG largely intact. Unverifiable without the
+organisers' scorer, which is not published.
+
+EB-NeRD's `scores.txt` additionally carries a per-day AUC breakdown across the 8-day test window
+(2023-06-01 to 06-08), ranging 0.5240 to 0.5510. Useful corroboration for §5/§6's finding that
+EB-NeRD drifts across time: even inside the official test window the daily AUC moves by ~0.027.
