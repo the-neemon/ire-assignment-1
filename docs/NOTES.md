@@ -389,8 +389,9 @@ so rather than pretending to a check it cannot perform.
 
 ## Aligning to the released assignment PDF (Assignment1_v1.pdf)
 
-The formal PDF (`brief/Assignment1_v1.pdf`) is the authoritative brief and superseded the earlier
-plain-text version, which has been removed. Most requirements already matched; three changed the code.
+The formal PDF (`Assignment1_v1.pdf`, course-issued and not tracked in this repo) is the
+authoritative brief and superseded the earlier plain-text version, which has been removed.
+Most requirements already matched; three changed the code.
 
 **Q2.4 / Q3.4 — recall@K for K ∈ {50, 100, 200}.** The build stages had computed recall only at
 K=200, printed it to the console, and never persisted it; `eval/run.py` did not open the

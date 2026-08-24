@@ -17,12 +17,12 @@ __pycache__/
 .pytest_cache/
 .ipynb_checkpoints/
 
-# Awaiting review before commit.
-deliverable/AI_USAGE_LOG.md
+# LibreOffice/OpenOffice editing locks, created if a deliverable is opened in an office app.
+.~lock.*#
 
-# LaTeX build intermediates. design_note_c1.tex is the source and is tracked;
-# the PDF is tracked because it is the graded deliverable. Everything xelatex
-# emits alongside them is regenerable and is not.
+# LaTeX build intermediates. Only the compiled PDF is tracked, because it is the
+# graded deliverable; the .tex sources are kept locally (see below) and everything
+# xelatex emits alongside them is regenerable and is not tracked.
 *.aux
 *.log
 *.out
