@@ -1,8 +1,8 @@
 """BM25 document-field ablation: title vs title+abstract vs title+abstract+body.
 
 Answers "EB-NeRD ships body text, why aren't you indexing it?" with a measurement rather
-than an assumption. Results are recorded in docs/NOTES.md under "Which article fields to
-index (field ablation)".
+than an assumption. Result: body costs -0.0166 AUC on EB-NeRD val, so the shipped setting
+(title+abstract) stays.
 
 Non-destructive by design: reuses retrieval.bm25's own functions but never writes to
 data/processed, so the shipped artifacts and the reported results stay untouched. Verify

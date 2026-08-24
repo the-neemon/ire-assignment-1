@@ -1,7 +1,7 @@
 """Entity overlap as a candidate signal, on MIND (previously untested, unscored).
 
 MIND ships clean Wikidata-linked entities, currently parsed into the feature store and never
-scored (docs/NOTES.md: "nothing scores on entities yet"). Tests two things: does entity overlap
+scored until this ablation. Tests two things: does entity overlap
 alone carry ranking signal, and does blending it into the shipped `fused` score help.
 
 Score = Jaccard(candidate's entities, union of the user's last history_len articles' entities).

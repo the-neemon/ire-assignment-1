@@ -10,8 +10,9 @@ The user vector is the mean of the L2-normalised vectors of their last `history_
 articles. History is guaranteed strictly earlier than the impression by pipeline.split.
 
 Article vectors come from whichever source the dataset has:
-  EB-NeRD  the organisers' 300-d word2vec document vectors (config `embeddings`), picked
-           over bert_base_multilingual_cased by the val-only ablation in NOTES.md
+  EB-NeRD  the organisers' 768-d contrastive_vector document vectors (config `embeddings`),
+           picked over word2vec, mBERT and a self-encoded XLM-R by a val-only ablation
+           (docs/NOTES.md, "Adopting contrastive_vector")
   MIND     encoded here with a sentence-transformers model (config `model`) and cached
            to data/processed/<dataset>/embeddings.parquet, so encoding happens once
 

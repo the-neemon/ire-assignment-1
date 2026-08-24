@@ -2,7 +2,7 @@
 
 The MIND leaderboard entry is embeddings-only because `index.get_scores(tokens)` is dense over
 the whole corpus per distinct query: ~2M distinct MIND-large histories x 120,961 articles is
-~10^11 operations (docs/NOTES.md, "MIND submission is embeddings-only").
+~10^11 operations, which is why the MIND submission ships embeddings-only.
 
 But the leaderboard task is *re-ranking a given pool*, not full-corpus retrieval. The re-rank
 track only ever reads the candidates' positions out of that dense vector (retrieval/bm25.py,
@@ -86,7 +86,7 @@ print(f"  corpus here: {articles.height:,} articles")
 print()
 print("Extrapolation to the MIND-large leaderboard set:")
 MIND_LARGE_ARTICLES = 120_961
-MIND_LARGE_DISTINCT = 2_000_000   # ~2M distinct histories, per NOTES.md
+MIND_LARGE_DISTINCT = 2_000_000   # ~2M distinct histories in MIND-large test
 scale = MIND_LARGE_ARTICLES / articles.height
 est_per_query = per_query * scale
 est_total_h = est_per_query * MIND_LARGE_DISTINCT / 3600

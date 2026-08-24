@@ -30,3 +30,17 @@ deliverable/AI_USAGE_LOG.md
 *.fls
 *.fdb_latexmk
 *.synctex.gz
+
+# Personal study aids, kept locally. docs/NOTES.md is the exception: it is the
+# evidence trail the design note's claims rest on, so it ships.
+docs/*
+!docs/NOTES.md
+
+# Design note: only the final PDF is submitted. The LaTeX sources and the
+# single-column variant are kept locally for editing, not tracked.
+*.tex
+deliverable/design_note_c1_2col.pdf
+
+# Agent instructions and the given assignment brief: not my work product.
+CLAUDE.md
+brief/

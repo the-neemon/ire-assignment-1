@@ -38,7 +38,9 @@ PROC = ROOT / "data/processed"
 
 # Most recent clicks forming the query, per dataset config (`history_len`). News interest
 # decays fast, so how far back to look is a real per-dataset question, not one constant:
-# the sweep in docs/NOTES.md found EB-NeRD flat but MIND rising significantly to 100.
+# a val sweep found EB-NeRD flat from 1 to 100 clicks (median history 258) but MIND rising
+# significantly to 100 then plateauing (median history 20), so they ship different values.
+# Sweep tables in docs/NOTES.md.
 TOP_K = 200        # "a few hundred candidates"
 OVERFETCH = 3      # fetch TOP_K*OVERFETCH before the publication-date filter thins it
 

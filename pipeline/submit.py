@@ -20,8 +20,8 @@ file and nothing else — no folders, no __MACOSX.
 
 Only the embedding scorer ships here, on both datasets. BM25's `get_scores` is dense over the
 whole corpus per distinct query, which measured at ~1.6 h for MIND-large's 2M distinct histories
-(docs/NOTES.md) — expensive enough that I left it out, not impossible. Adding it would mean a
-BM25 path in this file, which does not exist yet.
+(1.6 ms/query over 65,238 articles, extrapolated) — expensive enough that I left it out, not
+impossible. Adding it would mean a BM25 path in this file, which does not exist yet.
 
 **So the leaderboard entry is not the reported headline system, and the gap is not free.**
 Offline, `fused` beats embeddings alone by +0.0014 AUC on MIND and +0.0095 on EB-NeRD; on

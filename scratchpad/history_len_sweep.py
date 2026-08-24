@@ -1,6 +1,6 @@
 """history_len sweep on MIND, both scorers.
 
-The original sweep (docs/NOTES.md, "BM25 results") only ran on EB-NeRD val, where it came back
+The original sweep only ran on EB-NeRD val, where it came back
 flat because EB-NeRD's median history is 258 clicks and cutting at 30 barely touches the query.
 MIND's median history is 20 (mean 33.3), so a cutoff of 30 was close to "use everything" there,
 and the shipped value was never actually checked against MIND's own history distribution. This

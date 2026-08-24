@@ -4,10 +4,10 @@ Two-stage news recommendation on **EB-NeRD** (Danish, Ekstra Bladet) and **MIND*
 Microsoft), with a temporal data pipeline, BM25 and embedding candidate generation, and an
 offline evaluation harness with bootstrap confidence intervals.
 
-New to the project? Read `docs/WALKTHROUGH.md` first: it explains what the system does and why,
-end to end, in plain English. `docs/NOTES.md` is the evidence trail (measured data facts and every
-decision's justification), `deliverable/design_note_c1.pdf` is the write-up, and `results/` holds the
-generated metric reports.
+`deliverable/design_note_c1.pdf` is the write-up and `results/` holds the generated metric
+reports, one per dataset and split, with bootstrap confidence intervals and paired comparisons.
+`docs/NOTES.md` is the evidence trail: measured schemas, every ablation with its numbers, the
+leakage inventory, and the failures worth remembering.
 
 ## Run it
 
@@ -54,16 +54,12 @@ eval/                     metrics, beyond-accuracy, slicing, bootstrap, runner
 tests/test_leakage.py     no-future-click assertions against the built artifacts
 notebooks/                article encoding on a Kaggle GPU
 
-docs/WALKTHROUGH.md       how the system works and why, plain English — start here
-docs/NOTES.md             measured facts, every decision, every ablation
-docs/GLOSSARY.md          every term in the assignment, defined
+docs/NOTES.md             evidence trail: schemas, ablations, leakage inventory, failures
 
-deliverable/design_note_c1.tex  the write-up, LaTeX source (<=4 pages)
-deliverable/design_note_c1.pdf  the graded deliverable; rebuild with `xelatex design_note_c1.tex`
+deliverable/design_note_c1.pdf  the graded write-up (4 pages)
 deliverable/submissions/        the two Codabench zips
-
-brief/Assignment1_v1.pdf  the authoritative assignment text
-brief/SPEC.md             original build plan, historical
+deliverable/leaderboard_screenshots/   Codabench result rows for both finals
+deliverable/{ebnerd,mind}_scoring_result/   organisers' raw scoring output
 
 results/                  generated reports (markdown + json)
 data/                     raw -> interim -> processed (gitignored)

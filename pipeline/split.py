@@ -10,7 +10,8 @@ EB-NeRD and MIND describe the same thing in different shapes. Everything downstr
         candidates          List(String)     the pool shown, article ids
         clicked             List(String)     subset of candidates that was clicked
         history             List(String)     this user's prior clicks, strictly earlier
-        history_timestamps  List(Datetime)   EB-NeRD only; null for MIND (see NOTES.md)
+        history_timestamps  List(Datetime)   EB-NeRD only; MIND ships no per-item
+                                             history timestamps, so this is null there
         recency_seconds     Float64          seconds since this user's most recent prior
                                              click; null where genuinely unknown
 
